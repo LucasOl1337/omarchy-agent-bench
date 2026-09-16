@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Visit-and-leave: Super+6 stays view-only; `agent-bench collaborate --here` / Super+Alt+A takes the focused viewer; leaving the reserved workspace (Super+1) auto-resumes the agent.
+
 ## 0.1.0 — 2026-09-16
 
 First public snapshot of the nested X11 benches used on Omarchy (Hyprland):

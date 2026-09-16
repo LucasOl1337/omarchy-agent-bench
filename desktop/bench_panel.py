@@ -21,7 +21,7 @@ table.heading('#0', text='Bancada'); table.column('#0', width=310)
 table.heading('workspace', text='Workspace'); table.column('workspace', width=100, anchor='center')
 table.heading('mode', text='Controle'); table.column('mode', width=130, anchor='center')
 table.pack(fill='both', expand=True)
-status = tk.StringVar(value='Selecione uma bancada. O clipboard fica separado em todos os modos.')
+status = tk.StringVar(value='Super+6 visita sem pausar o agente. Super+Alt+A assume a janela focada. Super+1 devolve sozinho.')
 
 def refresh():
     try:
@@ -60,7 +60,7 @@ def change(action):
         name = selected()
         views(action, name)
         if action == 'collaborate':
-            status.set('Controle com você. Clique em Mostrar tela para interagir; depois devolva ao agente.')
+            status.set('Controle com você. Super+1 (ou Devolver ao agente) devolve; o agente continua pausado só enquanto você estiver no workspace da bancada.')
         else:
             status.set('Controle devolvido. A janela retornou ao workspace reservado.')
         mode = 'Você' if action == 'collaborate' else 'Agente'

@@ -187,6 +187,8 @@ def serve(name):
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--here', action='store_true',
+                        help='collaborate/resume na bancada da janela ou workspace focado')
     parser.add_argument('action', choices=['start', 'stop', 'status', 'list', 'exec', 'launch',
                         'browser', 'home', 'terminal', 'tools', 'doctor', 'screenshot', 'clipboard', 'view', 'mcp',
                         'collaborate', 'resume', 'dock', 'ensure', 'cdp', 'gc', 'keep', '_boot', '_serve'])
@@ -197,6 +199,10 @@ def main():
     if a.action == 'gc':
         apply = a.name == '--apply' or '--apply' in a.args or '--apply' in argv
         print(json.dumps(gc_sessions(apply=apply), indent=2, ensure_ascii=False)); return 0
+    if a.here or '--here' in a.args or (a.action in ('collaborate', 'resume') and a.name == 'aqui'):
+        if a.action not in ('collaborate', 'resume'):
+            raise ValueError('--here só se aplica a collaborate ou resume')
+        print(json.dumps(views(a.action, '--here' if a.here or '--here' in a.args else 'aqui'), indent=2)); return 0
     name = valid(a.name)
     if a.action == 'keep':
         reason = ' '.join(argv) or 'missão recorrente com login'

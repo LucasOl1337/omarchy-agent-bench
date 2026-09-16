@@ -16,8 +16,12 @@ CONFIG = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'hyp
 REGISTRY = RUNTIME / 'views.json'
 SLOTS = RUNTIME / 'view-workspaces.tsv'
 AGENT_WORKSPACES = (6, 7, 8, 9, 10, 11)
+HERE = ('--here', 'aqui')
+LEAVE_SECONDS = 1.2
+VIEWER_TITLE = re.compile(r'^Bancada dos agentes — ([a-z0-9][a-z0-9-]{0,39}) - TigerVNC$')
 entries = {}
 processes = {}
+departed_since = {}
 stopping = False
 
 def pick_slot(exclude_name=None):
@@ -41,6 +45,36 @@ def hypr(*args):
 
 def clients():
     return json.loads(hypr('-j', 'clients'))
+
+def monitors():
+    return json.loads(hypr('-j', 'monitors'))
+
+def focused_workspace():
+    for monitor in monitors():
+        if monitor.get('focused'):
+            return monitor.get('activeWorkspace', {}).get('id')
+    return None
+
+def focused_bench_name():
+    try:
+        active = json.loads(hypr('-j', 'activewindow'))
+    except (OSError, ValueError, subprocess.CalledProcessError):
+        active = {}
+    if not isinstance(active, dict):
+        active = {}
+    title = active.get('title') or ''
+    match = VIEWER_TITLE.fullmatch(title)
+    if active.get('class') == 'Vncviewer' and match:
+        name = match.group(1)
+        if name in entries:
+            return name
+    workspace = focused_workspace()
+    matches = [name for name, entry in entries.items() if entry.get('workspace') == workspace]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise RuntimeError('Várias bancadas neste workspace. Clique na janela da que você quer e aperte Super+Alt+A.')
+    raise RuntimeError('Nenhuma bancada neste workspace. Super+6 … Super+0 abre a faixa 6–10; o painel cobre o 11.')
 
 def save():
     for path, content in ((REGISTRY, json.dumps(entries, indent=2) + '\n'),
@@ -152,6 +186,39 @@ def handoff(name, human):
             dock(name)
     return {**entries[name], 'name': name, 'mode': 'humano' if human else 'agente'}
 
+def resolve(name):
+    return focused_bench_name() if name in HERE else name
+
+def release_departed(now=None):
+    """Give the bench back when its reserved workspace is no longer on any monitor (Super+1, …)."""
+    now = time.monotonic() if now is None else now
+    try:
+        visible = {monitor.get('activeWorkspace', {}).get('id') for monitor in monitors()}
+    except (OSError, ValueError, subprocess.CalledProcessError, RuntimeError):
+        return []
+    visible.discard(None)
+    if not visible:
+        return []
+    released = []
+    for name, entry in list(entries.items()):
+        if not (RUNTIME / name / 'human-control').exists():
+            departed_since.pop(name, None)
+            continue
+        if entry.get('workspace') in visible:
+            departed_since.pop(name, None)
+            continue
+        departed_since.setdefault(name, now)
+        if now - departed_since[name] < LEAVE_SECONDS:
+            continue
+        try:
+            handoff(name, False)
+            departed_since.pop(name, None)
+            released.append(name)
+            print('agent-bench-views auto-resume:', name, flush=True)
+        except Exception as exc:
+            print('agent-bench-views auto-resume:', name, exc, flush=True)
+    return released
+
 def scan():
     active = set()
     for path in sorted(RUNTIME.glob('*/control.sock'), key=lambda p: (p.parent.name != 'padrao', p.parent.name)):
@@ -183,8 +250,8 @@ class Handler(socketserver.StreamRequestHandler):
                 if (RUNTIME / name / 'human-control').exists():
                     raise RuntimeError('Bancada sob controle humano; aguarde a devolução.')
                 result = dock(name)
-            elif action == 'collaborate': result = handoff(name, True)
-            elif action == 'resume': result = handoff(name, False)
+            elif action == 'collaborate': result = handoff(resolve(name), True)
+            elif action == 'resume': result = handoff(resolve(name), False)
             elif action == 'status': result = entries.get(name, {})
             else: raise ValueError('Ação desconhecida')
         except Exception as exc:
@@ -215,9 +282,11 @@ def main():
         next_reap = 0
         while not stopping:
             if time.monotonic() >= next_scan:
-                try: scan()
+                try:
+                    scan()
+                    release_departed()
                 except Exception as exc: print('agent-bench-views:', exc, flush=True)
-                next_scan = time.monotonic() + 2
+                next_scan = time.monotonic() + 1
             if time.monotonic() >= next_reap:
                 try:
                     from bench_ops import reap_idle

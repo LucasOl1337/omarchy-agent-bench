@@ -6,9 +6,9 @@ Toda navegação e operação visual dos agentes acontece em uma bancada, inclus
 
 Cada bancada ativa recebe uma janela num workspace **6–11**, todos dedicados a agentes. A bancada `padrao` inicia no login. Outras tarefas recebem o próximo livre; se os seis estiverem ocupados, o viewer compartilha um deles. Workspaces 1–5 pertencem ao humano. Não alocar 12+.
 
-Use **Super+6** … **Super+9**, **Super+0** (10), ou o painel **Bancada dos agentes** para visitar as bancadas. O painel permite localizar também o workspace 11. O supervisor posiciona os viewers sem trocar seu workspace ativo.
+Use **Super+6** … **Super+9**, **Super+0** (10), ou o painel **Bancada dos agentes** para visitar as bancadas. O painel permite localizar também o workspace 11. Super+6 só troca *aquele* monitor para o workspace: o agente continua no controle, o viewer vem view-only. **Super+Alt+A** (ou **Assumir controle**) libera mouse e teclado na janela focada e pausa o agente. **Super+1** no monitor que está mostrando a bancada devolve sozinho. O supervisor posiciona os viewers sem trocar seu workspace ativo.
 
-Para clicar e digitar na bancada, abra **Bancada dos agentes** no lançador. Selecione a bancada e clique em **Assumir controle**, depois em **Mostrar tela**. Os comandos de entrada do agente ficam bloqueados até **Devolver ao agente**. A devolução desliga a entrada pelo viewer e retorna a janela ao workspace reservado.
+Para clicar e digitar sem o atalho, o painel ainda tem **Assumir controle**, **Mostrar tela** e **Devolver ao agente**.
 
 O clipboard permanece separado em ambos os modos. Fechar o viewer mantém os aplicativos funcionando. `agent-bench view NOME` reabre o viewer sem abrir o painel.
 
@@ -56,11 +56,12 @@ Inspeção: `journalctl --user -u agent-bench@NOME.service` e `desktop/sessions/
 
 ```sh
 agent-bench collaborate NOME
+agent-bench collaborate --here
 agent-bench resume NOME
 agent-bench dock NOME
 ```
 
-Agentes só executam `resume` quando o humano pedir a devolução. Não use `hyprctl dispatch workspace`.
+Visitar o workspace (Super+6) não pausa o agente. `collaborate` / Super+Alt+A pausa. Sair do workspace da bancada (Super+1) dispara `resume` sozinho. Agentes só executam `resume` quando o humano pedir a devolução. Não use `hyprctl dispatch workspace`.
 
 Regras Hyprland: `~/.config/hypr/agent-bench.lua`. Estado: `$XDG_RUNTIME_DIR/agent-bench/views.json`.
 

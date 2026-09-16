@@ -38,7 +38,7 @@ agent-bench cdp demo
 agent-bench browser demo https://example.com
 ```
 
-Acompanhe com **Super+6** … **Super+9**, **Super+0** (workspace 10) ou o painel **Bancada dos agentes**. **Assumir controle** para clicar e digitar; **Devolver ao agente** antes do agente continuar. O clipboard permanece separado.
+Acompanhe com **Super+6** … **Super+9**, **Super+0** (workspace 10) ou o painel **Bancada dos agentes**. Super+6 só visita (o agente continua). **Super+Alt+A** / **Assumir controle** para clicar e digitar; **Super+1** no mesmo monitor devolve sozinho. O clipboard permanece separado.
 
 Ligue o harness no MCP multiplexado (`contrib/mcp/`). Formulários: CDP/Playwright no endpoint da bancada. CUA de pixels só quando a página for opaca. Não use `hyprctl dispatch workspace`. Não dê `stop` no meio de um formulário.
 

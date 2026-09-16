@@ -38,6 +38,15 @@ Options: `--prefix DIR`, `--no-enable`, `--no-skills`, `--no-hypr`.
 
 The Hyprland snippet uses **persistent workspaces 6–11 without pinning a monitor serial**. Hyprland places them like any other persistent workspace. If you previously bound those numbers to specific monitors, compare the `.bak.*` file the installer writes next to `hyprland.lua` / `agent-bench.lua`.
 
+Optional: take mouse/keyboard on the focused viewer with Super+Alt+A. Add this to `~/.config/hypr/bindings.lua`:
+
+```lua
+o.bind("SUPER + ALT + A", "Take focused bench",
+  "bash -lc 'agent-bench collaborate --here || notify-send -u critical Bench \"Could not take the focused window\"'")
+```
+
+Super+6 stays view-only. Super+1 on that monitor gives the bench back.
+
 `install.sh` does not stop or restart benches that are already running.
 
 ## MCP in the harness

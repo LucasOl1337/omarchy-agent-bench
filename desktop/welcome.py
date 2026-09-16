@@ -46,7 +46,7 @@ def refresh_status():
     except (OSError,ValueError): status.set('Preparando identificação da bancada…')
     root.after(3000,refresh_status)
 refresh_status()
-notice=tk.StringVar(value='Toda interface desta tarefa fica aqui. Workspaces 1–5 pertencem ao humano.')
+notice=tk.StringVar(value='Toda interface desta tarefa fica aqui. Super+6 visita; Super+Alt+A assume; Super+1 devolve. Workspaces 1–5 pertencem ao humano.')
 def run(*args):
     try:
         result=subprocess.run([bench,*args],capture_output=True,text=True,timeout=25)

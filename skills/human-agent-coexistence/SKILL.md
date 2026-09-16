@@ -28,7 +28,7 @@ Forms: CDP/Playwright on `bench_cdp` / `agent-bench cdp NAME`. Pixel CUA only wh
 
 If a route fails, recover another route **inside the same bench**. Direct control of the human session only when the human asked for that one intervention. Saving/restoring the clipboard is not isolation.
 
-Do not `hyprctl dispatch workspace`: it switches the workspace of the monitor under the human mouse. The supervisor places the viewer without following the operator. During human-control, wait; `resume` only if asked. Stop only your bench.
+Do not `hyprctl dispatch workspace`: it switches the workspace of the monitor under the human mouse. The supervisor places the viewer without following the operator. Super+6 visits without pausing. Only Super+Alt+A / Take control writes `human-control`. Leaving the reserved workspace (Super+1) returns control. `resume` only if asked. Stop only your bench.
 
 Workspaces 1–5 stay human. 6–11 are for agents. Do not allocate 12+: Hyprland opens that workspace on the focused monitor.
 

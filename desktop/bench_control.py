@@ -21,7 +21,7 @@ def rpc(path, payload, timeout=15):
 
 def views(action, name):
     try:
-        if action in ('collaborate', 'resume'):
+        if action in ('collaborate', 'resume') and name not in ('--here', 'aqui'):
             info = rpc(RUNTIME / name / 'control.sock', {'action': 'status'}, timeout=2)
             if info.get('protocol_version', 1) < 2:
                 raise RuntimeError('Esta bancada já estava em uso antes da atualização. O proprietário pode encerrá-la e iniciá-la ao terminar para habilitar colaboração.')

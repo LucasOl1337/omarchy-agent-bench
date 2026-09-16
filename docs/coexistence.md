@@ -14,11 +14,11 @@ The supervisor (`agent-bench-views.service`) only assigns 6–11. If all six hav
 
 ## Taking control
 
-The panel **Agent benches** (launcher) lists live names.
+The panel **Agent benches** (launcher) lists live names. Super+6… visits without pausing the agent (view-only). Bind **Super+Alt+A** to `agent-bench collaborate --here` if you want a keyboard shortcut.
 
 1. **Show screen** — reopen the viewer on its reserved workspace without changing *your* active workspace.
-2. **Take control** — waits until the current agent command finishes, then enables keyboard/mouse on the viewer and pauses agent input.
-3. **Give back to agent** — disables viewer input, allows MCP/`exec` again, docks the window.
+2. **Take control** / Super+Alt+A — waits until the current agent command finishes, then enables keyboard/mouse on the viewer and pauses agent input.
+3. **Give back to agent** — also happens automatically when the reserved workspace is no longer visible on any monitor (Super+1 on the monitor that was showing it). Disables viewer input, allows MCP/`exec` again, docks the window.
 
 Agents must not call `resume` unless the human asked. `exec`, `launch`, `browser`, clipboard write, and MCP already apply the lock and dock the viewer.
 

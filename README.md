@@ -58,7 +58,7 @@ agent-bench screenshot demo /tmp/demo.png
 agent-bench list
 ```
 
-Visit the bench with **Super+6** … **Super+9**, **Super+0** (workspace 10), or **Agent benches** in the launcher. Click **Take control** to click and type yourself; **Give back to agent** before the agent continues. Clipboard stays separate in both modes.
+Visit the bench with **Super+6** … **Super+9**, **Super+0** (workspace 10), or **Agent benches** in the launcher. Super+6 is view-only: the agent keeps working. **Super+Alt+A** (or **Take control**) lets you click and type. **Super+1** on that monitor gives the bench back. Clipboard stays separate in both modes.
 
 Point the harness at the multiplexed MCP (examples in [`contrib/mcp/`](contrib/mcp/)):
 
