@@ -1,0 +1,291 @@
+#!/usr/bin/env python3
+"""Local graphical test benches, alongside the human Omarchy session."""
+import argparse
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import signal
+import socket
+import socketserver
+import subprocess
+import sys
+import threading
+import time
+
+BASE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(BASE / 'desktop'))
+from bench_control import control, views
+from bench_ops import (RUNTIME, STATE, cdp_snapshot, chromium_argv, claim_owner, ensure,
+                       gc_sessions, keep_session, load_owner, paths, request, start,
+                       touch_activity, valid, wait_cdp)
+DROP = ('DISPLAY', 'WAYLAND_DISPLAY', 'WAYLAND_SOCKET', 'XAUTHORITY',
+        'HYPRLAND_INSTANCE_SIGNATURE', 'DBUS_SESSION_BUS_ADDRESS',
+        'DBUS_STARTER_ADDRESS', 'DBUS_STARTER_BUS_TYPE', 'AT_SPI_BUS_ADDRESS',
+        'SESSION_MANAGER', 'XDG_SESSION_ID', 'DESKTOP_STARTUP_ID')
+ENV_KEYS = ('AGENT_BENCH_NAME', 'DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR',
+            'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME',
+            'XDG_SESSION_TYPE', 'XDG_CURRENT_DESKTOP', 'GDK_BACKEND',
+            'QT_QPA_PLATFORM', 'GTK_USE_PORTAL', 'LIBGL_ALWAYS_SOFTWARE')
+
+def clean_env():
+    env = os.environ.copy()
+    for key in DROP:
+        env.pop(key, None)
+    return env
+
+def boot(name):
+    runtime, state = paths(name)
+    for p in (runtime, state, runtime / 'run', state / 'config', state / 'cache', state / 'data', state / 'state'):
+        p.mkdir(parents=True, exist_ok=True, mode=0o700)
+    env = clean_env()
+    env.update(AGENT_BENCH_NAME=name, XDG_RUNTIME_DIR=str(runtime / 'run'), XDG_CONFIG_HOME=str(state / 'config'),
+               XDG_CACHE_HOME=str(state / 'cache'), XDG_DATA_HOME=str(state / 'data'),
+               XDG_STATE_HOME=str(state / 'state'), XDG_SESSION_TYPE='x11',
+               XDG_CURRENT_DESKTOP='Openbox', GDK_BACKEND='x11', QT_QPA_PLATFORM='xcb',
+               GTK_USE_PORTAL='0', LIBGL_ALWAYS_SOFTWARE='1')
+    os.execve('/usr/bin/dbus-run-session', ['dbus-run-session', '--', str(Path(__file__).resolve()), '_serve', name], env)
+
+def serve(name):
+    runtime, state = paths(name)
+    children = []
+    log = (state / 'session.log').open('a', buffering=1)
+    stop = threading.Event()
+    def on_signal(*_): stop.set()
+    signal.signal(signal.SIGTERM, on_signal)
+    signal.signal(signal.SIGINT, on_signal)
+    # Serialize allocation only while claiming an X display; no human display is reused.
+    with (RUNTIME / '.display-lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        display = next((f':{n}' for n in range(80, 200)
+                        if not Path(f'/tmp/.X{n}-lock').exists()
+                        and not Path(f'/tmp/.X11-unix/X{n}').exists()), None)
+        if display is None: raise RuntimeError('Sem display livre para a bancada')
+        auth = runtime / 'Xauthority'
+        auth.touch(mode=0o600)
+        subprocess.run(['xauth', '-f', str(auth)], input=f'add {display} MIT-MAGIC-COOKIE-1 {secrets.token_hex(16)}\n',
+                       text=True, stdout=subprocess.DEVNULL, stderr=log, check=True)
+        os.environ['DISPLAY'] = display
+        os.environ['XAUTHORITY'] = str(auth)
+        view = runtime / 'view.sock'
+        view.unlink(missing_ok=True)
+        xvnc = subprocess.Popen(['Xvnc', display, '-auth', str(auth), '-geometry', '1600x1000',
+            '-depth', '24', '-nolisten', 'tcp', '-rfbport', '-1', '-rfbunixpath', str(view),
+            '-rfbunixmode', '384', '-SecurityTypes', 'None', '-AlwaysShared',
+            '-AcceptCutText=0', '-SendCutText=0', '-SendPrimary=0', '-SetPrimary=0',
+            '-AcceptKeyEvents=0', '-AcceptPointerEvents=0', '-AcceptSetDesktopSize=0',
+            '-AllowOverride', 'AcceptKeyEvents,AcceptPointerEvents', '-rendernode', '', '-desktop', f'Bancada dos agentes — {name}'],
+            stdout=log, stderr=log)
+        children.append(xvnc)
+        for _ in range(150):
+            if xvnc.poll() is not None: raise RuntimeError('Xvnc encerrou; consulte session.log')
+            probe = subprocess.run(['xdotool', 'getdisplaygeometry'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if probe.returncode == 0: break
+            time.sleep(.1)
+        else: raise RuntimeError('Xvnc não ficou pronto')
+        subprocess.run(['dbus-update-activation-environment', 'DISPLAY', 'XAUTHORITY',
+                        'XDG_RUNTIME_DIR', 'XDG_CURRENT_DESKTOP', 'XDG_SESSION_TYPE'],
+                       stdout=log, stderr=log, check=False)
+    env = {k: os.environ[k] for k in ENV_KEYS if k in os.environ}
+    info = {'name': name, 'protocol_version': 2, 'display': display, 'geometry': '1600x1000', 'server_pid': xvnc.pid,
+            'viewer_socket': str(view), 'clipboard_bridge': False, 'physical_input': False,
+            'state': str(state), 'env': env, 'owner': (load_owner(name).get('owner') or claim_owner(name, 'systemd')['owner'])}
+    (runtime / 'session.json').write_text(json.dumps(info, indent=2) + '\n')
+    touch_activity(name)
+    # Restart always disables viewer input. A previous human pause remains until
+    # explicitly returned; a restart must never silently give an agent control.
+    openbox_xml = state / 'config' / 'openbox.xml'
+    xml = (BASE / 'desktop/openbox.xml').read_text()
+    openbox_xml.write_text(xml.replace('@PREFIX@', str(BASE)))
+    wm = subprocess.Popen(['openbox', '--config-file', str(openbox_xml)], stdout=log, stderr=log)
+    children.append(wm)
+    subprocess.run(['xsetroot', '-solid', '#101b29'], stdout=log, stderr=log)
+    children.append(subprocess.Popen([sys.executable, str(BASE / 'desktop/welcome.py'), name, str(state)], stdout=log, stderr=log))
+    action_lock = threading.RLock()
+
+    class Handler(socketserver.StreamRequestHandler):
+        def handle(self):
+            try:
+                q = json.loads(self.rfile.readline(2 * 1024 * 1024))
+                action = q.get('action')
+                if xvnc.poll() is not None: raise RuntimeError('Display indisponível; sem fallback para o host')
+                if action != 'status':
+                    touch_activity(name)
+                if action == 'status':
+                    result = {**info, 'control_mode': 'humano' if (runtime / 'human-control').exists() else 'agente',
+                              'owner': load_owner(name).get('owner')}
+                elif action == 'human-input':
+                    with action_lock:
+                        value = '1' if q.get('enabled') else '0'
+                        subprocess.run(['vncconfig', '-set', 'AcceptKeyEvents=' + value,
+                                        'AcceptPointerEvents=' + value], check=True, timeout=5,
+                                       stdout=log, stderr=log)
+                        for parameter in ('AcceptKeyEvents', 'AcceptPointerEvents'):
+                            actual = subprocess.check_output(['vncconfig', '-get', parameter], text=True, timeout=5).strip()
+                            if actual.lower() not in (value, 'true' if value == '1' else 'false', 'on' if value == '1' else 'off'):
+                                raise RuntimeError('Servidor não confirmou a mudança de controle')
+                        result = {'human_input': value == '1'}
+                elif action == 'clipboard-set':
+                    with control(name), action_lock:
+                        copied = subprocess.run(['xclip', '-selection', 'clipboard', '-in'],
+                            input=q.get('input', '').encode(), stdout=subprocess.DEVNULL,
+                            stderr=log, timeout=5)
+                        result = {'returncode': copied.returncode, 'stdout': '', 'stderr': ''}
+                elif action in ('screenshot', 'clipboard-get'):
+                    cmd = ['import', '-window', 'root', q['output']] if action == 'screenshot' else ['xclip', '-selection', 'clipboard', '-out']
+                    read = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+                    result = {'returncode': read.returncode, 'stdout': read.stdout, 'stderr': read.stderr}
+                elif action in ('exec', 'launch'):
+                    cmd = q['argv']
+                    if not isinstance(cmd, list) or not cmd or not all(isinstance(a, str) for a in cmd):
+                        raise ValueError('argv inválido')
+                    cwd = q.get('cwd', str(state))
+                    with control(name), action_lock:
+                        if action == 'launch':
+                            child = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+                            children.append(child)
+                            result = {'pid': child.pid, 'display': display, 'name': name}
+                        else:
+                            child = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                                     stderr=subprocess.PIPE, start_new_session=True)
+                            try:
+                                out, err = child.communicate(q.get('input', '').encode(), timeout=min(float(q.get('timeout', 60)), 300))
+                            except subprocess.TimeoutExpired:
+                                os.killpg(child.pid, signal.SIGKILL)
+                                child.communicate()
+                                raise RuntimeError('Comando excedeu o tempo; processo encerrado dentro da bancada')
+                            result = {'returncode': child.returncode, 'stdout': out.decode(errors='replace')[:500000],
+                                      'stderr': err.decode(errors='replace')[:500000]}
+                else:
+                    raise ValueError('Ação desconhecida')
+            except Exception as exc:
+                result = {'error': str(exc)}
+            try: self.wfile.write(json.dumps(result).encode() + b'\n')
+            except BrokenPipeError: pass
+
+    class Server(socketserver.ThreadingUnixStreamServer):
+        daemon_threads = True
+    control_socket = runtime / 'control.sock'
+    control_socket.unlink(missing_ok=True)
+    try:
+        with Server(str(control_socket), Handler) as server:
+            os.chmod(control_socket, 0o600)
+            server.timeout = .5
+            while not stop.is_set() and xvnc.poll() is None and wm.poll() is None:
+                server.handle_request()
+                for child in children: child.poll()
+    finally:
+        control_socket.unlink(missing_ok=True)
+        (runtime / 'session.json').unlink(missing_ok=True)
+        for child in reversed(children):
+            if child.poll() is None: child.terminate()
+        # systemd KillMode=control-group also handles descendants of launched apps.
+        log.close()
+
+def main():
+    os.umask(0o077)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('action', choices=['start', 'stop', 'status', 'list', 'exec', 'launch',
+                        'browser', 'home', 'terminal', 'tools', 'doctor', 'screenshot', 'clipboard', 'view', 'mcp',
+                        'collaborate', 'resume', 'dock', 'ensure', 'cdp', 'gc', 'keep', '_boot', '_serve'])
+    parser.add_argument('name', nargs='?', default='padrao')
+    parser.add_argument('args', nargs=argparse.REMAINDER)
+    a = parser.parse_args()
+    argv = a.args[1:] if a.args[:1] == ['--'] else a.args
+    if a.action == 'gc':
+        apply = a.name == '--apply' or '--apply' in a.args or '--apply' in argv
+        print(json.dumps(gc_sessions(apply=apply), indent=2, ensure_ascii=False)); return 0
+    name = valid(a.name)
+    if a.action == 'keep':
+        reason = ' '.join(argv) or 'missão recorrente com login'
+        print(keep_session(name, reason)); return 0
+    if a.action == 'tools':
+        from toolkit import catalog
+        print(json.dumps(catalog(), ensure_ascii=False, indent=2)); return 0
+    if a.action == '_boot': return boot(name)
+    if a.action == '_serve': return serve(name)
+    if a.action == 'stop':
+        return subprocess.run(['systemctl', '--user', 'stop', f'agent-bench@{name}.service']).returncode
+    if a.action == 'list':
+        found = []
+        for p in sorted(RUNTIME.glob('*/control.sock')):
+            try:
+                d = request(p.parent.name, {'action': 'status'}, timeout=1)
+                record = {k: d.get(k) for k in ('name', 'display', 'geometry', 'control_mode', 'owner')}
+                if record['control_mode'] is None: record['control_mode'] = 'agente (versão anterior)'
+                try: record.update(views('status', p.parent.name))
+                except RuntimeError: pass
+                found.append(record)
+            except (OSError, ValueError, RuntimeError): pass
+        print(json.dumps(found, indent=2)); return 0
+    if a.action in ('start', 'status', 'ensure'):
+        d = ensure(name) if a.action in ('start', 'ensure') else request(name, {'action': 'status'}, timeout=2)
+        if a.action == 'status':
+            try: d.update(views('status', name))
+            except RuntimeError: pass
+            d['owner'] = load_owner(name).get('owner') or d.get('owner')
+        print(json.dumps({k: v for k, v in d.items() if k != 'env'}, indent=2)); return 0
+    if a.action == 'cdp':
+        url = argv[0] if argv else None
+        d = ensure(name, browser=True, url=url)
+        snap = d.get('cdp') or wait_cdp(d.get('state', paths(name)[1]))
+        print(json.dumps(snap, indent=2)); return 0 if snap.get('status') == 'conectado' else 1
+    if a.action in ('view', 'browser'): start(name)
+    info = request(name, {'action': 'status'}, timeout=2)
+    state = Path(info['state'])
+    if a.action == 'doctor':
+        from toolkit import inspect
+        try: view = views('status', name)
+        except RuntimeError: view = {}
+        print(json.dumps(inspect(name, info, view), ensure_ascii=False, indent=2)); return 0
+    if a.action == 'view':
+        print(json.dumps(views('ensure', name), indent=2)); return 0
+    if a.action in ('collaborate', 'resume', 'dock'):
+        print(json.dumps(views(a.action, name), indent=2)); return 0
+    if a.action == 'mcp':
+        env = clean_env(); env.update(info['env'])
+        from bench_mcp import run
+        return run(name, env)
+    q = {'action': 'exec', 'cwd': str(Path.cwd())}
+    if a.action in ('exec', 'launch'):
+        if not argv: raise ValueError('Informe o programa depois de --')
+        q.update(action=a.action, argv=argv)
+    elif a.action == 'home':
+        q.update(action='launch', argv=[sys.executable, str(BASE / 'desktop/welcome.py'), name, str(state)])
+    elif a.action == 'terminal':
+        q.update(action='launch', argv=['xterm', '-T', 'Terminal - ' + name, '-fa', 'monospace', '-fs', '12', '-bg', '#101b29', '-fg', '#e8f0f8'])
+    elif a.action == 'browser':
+        q.update(action='launch', argv=chromium_argv(state, argv or None))
+    elif a.action == 'screenshot':
+        if len(argv) != 1: raise ValueError('Informe o caminho PNG de saída')
+        output = Path(argv[0]).resolve()
+        q.update(action='screenshot', output=str(output))
+    elif a.action == 'clipboard':
+        if argv not in ([], ['--set']): raise ValueError('Use clipboard NOME [--set], com texto pelo stdin')
+        q['action'] = 'clipboard-get'
+        if argv: q.update(action='clipboard-set', input=sys.stdin.read())
+    # Existing benches keep running during updates. Gate commands in the CLI
+    # as well, and preserve only the two fixed read operations on older servers.
+    if info.get('protocol_version', 1) < 2:
+        if q['action'] == 'screenshot':
+            q.update(action='exec', argv=['import', '-window', 'root', q['output']])
+        elif q['action'] == 'clipboard-get':
+            q.update(action='exec', argv=['xclip', '-selection', 'clipboard', '-out'])
+    mutate = a.action in ('exec', 'launch', 'browser', 'home', 'terminal') or (a.action == 'clipboard' and bool(argv))
+    if mutate:
+        with control(name): result = request(name, q)
+    else:
+        result = request(name, q)
+    if 'pid' in result:
+        print(json.dumps(result)); return 0
+    sys.stdout.write(result.get('stdout', ''))
+    sys.stderr.write(result.get('stderr', ''))
+    return result['returncode']
+
+if __name__ == '__main__':
+    try: raise SystemExit(main())
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
+        print('agent-bench: ' + str(exc), file=sys.stderr)
+        raise SystemExit(1)

@@ -1,0 +1,19 @@
+[Unit]
+Description=Nested X11 bench for AI agents (%i)
+
+[Service]
+Type=simple
+ExecStart=@PREFIX@/bin/agent-bench _boot %i
+KillMode=control-group
+TimeoutStopSec=5
+Restart=on-failure
+RestartSec=2
+UMask=0077
+MemoryAccounting=yes
+MemoryHigh=4G
+MemoryMax=6G
+CPUWeight=50
+TasksMax=512
+
+[Install]
+WantedBy=default.target

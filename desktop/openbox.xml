@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+  <focus><focusNew>yes</focusNew><followMouse>no</followMouse></focus>
+  <theme><name>Onyx</name><titleLayout>NLIMC</titleLayout><keepBorder>yes</keepBorder></theme>
+  <desktops><number>1</number><firstdesk>1</firstdesk><names><name>Bancada</name></names></desktops>
+  <placement><policy>Smart</policy><center>yes</center></placement>
+  <keyboard>
+    <keybind key="F1"><action name="Execute"><command>@PREFIX@/desktop/open-home</command></action></keybind>
+    <keybind key="W-Return"><action name="Execute"><command>xterm -fa monospace -fs 12 -bg '#101b29' -fg '#e8f0f8'</command></action></keybind>
+    <keybind key="A-Tab"><action name="NextWindow"/></keybind>
+    <keybind key="A-F4"><action name="Close"/></keybind>
+  </keyboard>
+</openbox_config>

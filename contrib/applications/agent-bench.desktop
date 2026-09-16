@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Agent benches
+Comment=Watch agent screens, take control, and give it back
+Exec=/usr/bin/python3 @PREFIX@/desktop/bench_panel.py
+Icon=applications-development
+Terminal=false
+Categories=Development;
+Keywords=agents;bench;automation;omarchy;

@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "agent-bench": {
+      "command": "agent-bench-mcp"
+    }
+  }
+}

@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""Ensure a named bench, keep the Chromium profile, print CDP. Never stop."""
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+KEEP_DEFAULT = 'recurring login'
+
+
+def cli() -> str:
+    env = os.environ.get('AGENT_BENCH_BIN', '').strip()
+    if env:
+        return env
+    sibling = Path(__file__).resolve().parents[3] / 'bin' / 'agent-bench'
+    if sibling.is_file():
+        return str(sibling)
+    found = shutil.which('agent-bench')
+    if found:
+        return found
+    raise SystemExit('agent-bench not on PATH; set AGENT_BENCH_BIN or run from the git tree')
+
+
+def run(bench: str, args: list[str]) -> subprocess.CompletedProcess:
+    env = os.environ.copy()
+    if not env.get('AGENT_BENCH_OWNER'):
+        env['AGENT_BENCH_OWNER'] = 'named-login'
+    return subprocess.run([cli(), *args], capture_output=True, text=True, env=env, timeout=40)
+
+
+def parse(proc: subprocess.CompletedProcess):
+    text = (proc.stdout or '').strip()
+    if proc.returncode != 0 and not text:
+        raise RuntimeError((proc.stderr or 'agent-bench failed').strip()[:500])
+    if not text:
+        raise RuntimeError((proc.stderr or 'agent-bench produced no output').strip()[:500])
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return {'stdout': text}
+
+
+def prepare(name: str, reason: str) -> dict:
+    ensure = parse(run(name, ['ensure', name]))
+    keep = run(name, ['keep', name, reason])
+    if keep.returncode != 0:
+        raise RuntimeError((keep.stderr or 'keep failed').strip()[:500])
+    cdp = parse(run(name, ['cdp', name]))
+    status = parse(run(name, ['status', name]))
+    control = status.get('control_mode')
+    payload = {
+        'bench': name,
+        'owner': status.get('owner') or ensure.get('owner'),
+        'workspace': status.get('workspace') or ensure.get('workspace'),
+        'control': control,
+        'keep': reason,
+        'cdp': cdp,
+        'playwright': cdp.get('playwright'),
+        'never': ['stop during round', 'stop padrao', 'personal chromium', 'workspace 1-5'],
+    }
+    if control == 'humano':
+        payload['ok'] = False
+        payload['erro'] = 'CONTROLE_HUMANO'
+        return payload
+    payload['ok'] = cdp.get('status') == 'conectado'
+    return payload
+
+
+def main() -> int:
+    args = [a for a in sys.argv[1:] if a != '--']
+    dry = '--dry-run' in args
+    reason = KEEP_DEFAULT
+    if '--keep' in args:
+        i = args.index('--keep')
+        reason = args[i + 1] if i + 1 < len(args) else KEEP_DEFAULT
+        del args[i:i + 2]
+    args = [a for a in args if not a.startswith('--')]
+    name = (args[0] if args else os.environ.get('AGENT_BENCH_NAME') or '').strip()
+    if not name:
+        raise SystemExit('usage: prepare NAME [--keep REASON] [--dry-run]')
+    if dry:
+        json.dump({'bench': name, 'commands': ['ensure', 'keep', 'cdp'], 'keep': reason},
+                  sys.stdout, indent=2)
+        sys.stdout.write('\n')
+        return 0
+    try:
+        payload = prepare(name, reason)
+    except (RuntimeError, subprocess.TimeoutExpired) as exc:
+        json.dump({'ok': False, 'bench': name, 'erro': str(exc)[:500]}, sys.stdout, indent=2)
+        sys.stdout.write('\n')
+        return 1
+    json.dump(payload, sys.stdout, indent=2, ensure_ascii=False)
+    sys.stdout.write('\n')
+    if payload.get('erro') == 'CONTROLE_HUMANO':
+        return 2
+    return 0 if payload.get('ok') else 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
