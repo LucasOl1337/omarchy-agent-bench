@@ -18,9 +18,9 @@ import time
 BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE / 'desktop'))
 from bench_control import control, views
-from bench_ops import (RUNTIME, STATE, cdp_snapshot, chromium_argv, claim_owner, ensure,
-                       gc_sessions, keep_session, load_owner, paths, request, start,
-                       touch_activity, valid, wait_cdp)
+from bench_ops import (RUNTIME, STATE, cdp_snapshot, claim_owner, ensure,
+                       gc_sessions, keep_session, load_owner, open_browser, paths, request, start,
+                       touch_activity, valid, wait_cdp, bench_browser_snapshot)
 DROP = ('DISPLAY', 'WAYLAND_DISPLAY', 'WAYLAND_SOCKET', 'XAUTHORITY',
         'HYPRLAND_INSTANCE_SIGNATURE', 'DBUS_SESSION_BUS_ADDRESS',
         'DBUS_STARTER_ADDRESS', 'DBUS_STARTER_BUS_TYPE', 'AT_SPI_BUS_ADDRESS',
@@ -47,6 +47,17 @@ def boot(name):
                XDG_CURRENT_DESKTOP='Openbox', GDK_BACKEND='x11', QT_QPA_PLATFORM='xcb',
                GTK_USE_PORTAL='0', LIBGL_ALWAYS_SOFTWARE='1')
     os.execve('/usr/bin/dbus-run-session', ['dbus-run-session', '--', str(Path(__file__).resolve()), '_serve', name], env)
+
+def cgroup_tasks():
+    """Current/max tasks of this bench's cgroup, so callers can see it filling up."""
+    try:
+        cgroup = Path('/proc/self/cgroup').read_text().split('::', 1)[1].strip()
+        base = Path('/sys/fs/cgroup') / cgroup.lstrip('/')
+        current = int((base / 'pids.current').read_text())
+        limit = (base / 'pids.max').read_text().strip()
+        return {'current': current, 'max': None if limit == 'max' else int(limit)}
+    except (OSError, ValueError, IndexError):
+        return None
 
 def serve(name):
     runtime, state = paths(name)
@@ -96,14 +107,14 @@ def serve(name):
     touch_activity(name)
     # Restart always disables viewer input. A previous human pause remains until
     # explicitly returned; a restart must never silently give an agent control.
-    openbox_xml = state / 'config' / 'openbox.xml'
-    xml = (BASE / 'desktop/openbox.xml').read_text()
-    openbox_xml.write_text(xml.replace('@PREFIX@', str(BASE)))
-    wm = subprocess.Popen(['openbox', '--config-file', str(openbox_xml)], stdout=log, stderr=log)
+    wm = subprocess.Popen(['openbox', '--config-file', str(BASE / 'desktop/openbox.xml')], stdout=log, stderr=log)
     children.append(wm)
     subprocess.run(['xsetroot', '-solid', '#101b29'], stdout=log, stderr=log)
     children.append(subprocess.Popen([sys.executable, str(BASE / 'desktop/welcome.py'), name, str(state)], stdout=log, stderr=log))
     action_lock = threading.RLock()
+    # Last state the server confirmed with vncconfig. The supervisor reads it to
+    # decide whether a failed handoff actually changed anything.
+    human_input = {'enabled': False, 'confirmed': True}
 
     class Handler(socketserver.StreamRequestHandler):
         def handle(self):
@@ -115,17 +126,27 @@ def serve(name):
                     touch_activity(name)
                 if action == 'status':
                     result = {**info, 'control_mode': 'humano' if (runtime / 'human-control').exists() else 'agente',
-                              'owner': load_owner(name).get('owner')}
+                              'owner': load_owner(name).get('owner'), 'human_input': dict(human_input),
+                              'tasks': cgroup_tasks()}
                 elif action == 'human-input':
                     with action_lock:
                         value = '1' if q.get('enabled') else '0'
-                        subprocess.run(['vncconfig', '-set', 'AcceptKeyEvents=' + value,
-                                        'AcceptPointerEvents=' + value], check=True, timeout=5,
-                                       stdout=log, stderr=log)
+                        try:
+                            subprocess.run(['vncconfig', '-set', 'AcceptKeyEvents=' + value,
+                                            'AcceptPointerEvents=' + value], check=True, timeout=5,
+                                           stdout=log, stderr=log)
+                        except OSError as exc:
+                            # fork/exec failed (cgroup cheio): vncconfig never ran, state unchanged.
+                            raise RuntimeError(f'vncconfig não iniciou: {exc}') from exc
+                        except subprocess.SubprocessError:
+                            human_input['confirmed'] = False
+                            raise
+                        human_input['confirmed'] = False
                         for parameter in ('AcceptKeyEvents', 'AcceptPointerEvents'):
                             actual = subprocess.check_output(['vncconfig', '-get', parameter], text=True, timeout=5).strip()
                             if actual.lower() not in (value, 'true' if value == '1' else 'false', 'on' if value == '1' else 'off'):
                                 raise RuntimeError('Servidor não confirmou a mudança de controle')
+                        human_input.update(enabled=value == '1', confirmed=True)
                         result = {'human_input': value == '1'}
                 elif action == 'clipboard-set':
                     with control(name), action_lock:
@@ -167,6 +188,17 @@ def serve(name):
 
     class Server(socketserver.ThreadingUnixStreamServer):
         daemon_threads = True
+
+        def process_request(self, request, client_address):
+            try:
+                super().process_request(request, client_address)
+            except RuntimeError as exc:
+                # The cgroup is out of tasks (TasksMax); a thread per request is
+                # impossible. Answer inline so status/handoff still work and the
+                # caller learns why instead of getting an empty reply.
+                print(f'agent-bench {name}: sem threads ({exc}); atendendo inline', file=log, flush=True)
+                self.finish_request(request, client_address)
+                self.shutdown_request(request)
     control_socket = runtime / 'control.sock'
     control_socket.unlink(missing_ok=True)
     try:
@@ -188,22 +220,36 @@ def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--here', action='store_true',
-                        help='collaborate/resume na bancada da janela ou workspace focado')
+                        help='collaborate/resume/visit/close-here na bancada da janela ou workspace focado')
     parser.add_argument('action', choices=['start', 'stop', 'status', 'list', 'exec', 'launch',
                         'browser', 'home', 'terminal', 'tools', 'doctor', 'screenshot', 'clipboard', 'view', 'mcp',
-                        'collaborate', 'resume', 'dock', 'ensure', 'cdp', 'gc', 'keep', '_boot', '_serve'])
-    parser.add_argument('name', nargs='?', default='padrao')
+                        'collaborate', 'resume', 'dock', 'ensure', 'cdp', 'browser-status', 'gc', 'keep', 'visit', 'close-here',
+                        '_boot', '_serve'])
+    parser.add_argument('name', nargs='?', default=None)
     parser.add_argument('args', nargs=argparse.REMAINDER)
     a = parser.parse_args()
     argv = a.args[1:] if a.args[:1] == ['--'] else a.args
     if a.action == 'gc':
         apply = a.name == '--apply' or '--apply' in a.args or '--apply' in argv
         print(json.dumps(gc_sessions(apply=apply), indent=2, ensure_ascii=False)); return 0
+    if a.action == 'close-here':
+        from bench_human import close_here
+        print(json.dumps(close_here(), indent=2)); return 0
+    if a.action == 'visit':
+        from bench_human import visit
+        target = '--here' if a.here or not a.name or a.name in ('--here', 'aqui') or '--here' in a.args else a.name
+        print(json.dumps(visit(target), indent=2)); return 0
     if a.here or '--here' in a.args or (a.action in ('collaborate', 'resume') and a.name == 'aqui'):
         if a.action not in ('collaborate', 'resume'):
-            raise ValueError('--here só se aplica a collaborate ou resume')
+            raise ValueError('--here só se aplica a collaborate, resume, visit ou close-here')
         print(json.dumps(views(a.action, '--here' if a.here or '--here' in a.args else 'aqui'), indent=2)); return 0
-    name = valid(a.name)
+    name = valid(a.name or 'padrao')
+    if a.action == 'browser-status':
+        d = bench_browser_snapshot(name, include_pages=False)
+        # A location check needs no page titles, URLs or owned-tab access.
+        d.pop('pages', None)
+        print(json.dumps(d, indent=2, ensure_ascii=False))
+        return 0 if d.get('status') == 'conectado' else 1
     if a.action == 'keep':
         reason = ' '.join(argv) or 'missão recorrente com login'
         print(keep_session(name, reason)); return 0
@@ -234,8 +280,10 @@ def main():
             d['owner'] = load_owner(name).get('owner') or d.get('owner')
         print(json.dumps({k: v for k, v in d.items() if k != 'env'}, indent=2)); return 0
     if a.action == 'cdp':
-        url = argv[0] if argv else None
-        d = ensure(name, browser=True, url=url)
+        isolated = '--isolado' in argv
+        rest = [x for x in argv if x != '--isolado']
+        url = rest[0] if rest else None
+        d = ensure(name, browser=True, url=url, isolated=isolated)
         snap = d.get('cdp') or wait_cdp(d.get('state', paths(name)[1]))
         print(json.dumps(snap, indent=2)); return 0 if snap.get('status') == 'conectado' else 1
     if a.action in ('view', 'browser'): start(name)
@@ -248,6 +296,13 @@ def main():
         print(json.dumps(inspect(name, info, view), ensure_ascii=False, indent=2)); return 0
     if a.action == 'view':
         print(json.dumps(views('ensure', name), indent=2)); return 0
+    if a.action == 'browser':
+        # Perfil persistente previamente preparado dentro da bancada.
+        isolated = '--isolado' in argv
+        urls = [x for x in argv if x != '--isolado'] or None
+        with control(name): result = open_browser(name, info, urls, isolated=isolated)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0 if result.get('status') == 'conectado' else 1
     if a.action in ('collaborate', 'resume', 'dock'):
         print(json.dumps(views(a.action, name), indent=2)); return 0
     if a.action == 'mcp':
@@ -262,8 +317,6 @@ def main():
         q.update(action='launch', argv=[sys.executable, str(BASE / 'desktop/welcome.py'), name, str(state)])
     elif a.action == 'terminal':
         q.update(action='launch', argv=['xterm', '-T', 'Terminal - ' + name, '-fa', 'monospace', '-fs', '12', '-bg', '#101b29', '-fg', '#e8f0f8'])
-    elif a.action == 'browser':
-        q.update(action='launch', argv=chromium_argv(state, argv or None))
     elif a.action == 'screenshot':
         if len(argv) != 1: raise ValueError('Informe o caminho PNG de saída')
         output = Path(argv[0]).resolve()
@@ -279,7 +332,7 @@ def main():
             q.update(action='exec', argv=['import', '-window', 'root', q['output']])
         elif q['action'] == 'clipboard-get':
             q.update(action='exec', argv=['xclip', '-selection', 'clipboard', '-out'])
-    mutate = a.action in ('exec', 'launch', 'browser', 'home', 'terminal') or (a.action == 'clipboard' and bool(argv))
+    mutate = a.action in ('exec', 'launch', 'home', 'terminal') or (a.action == 'clipboard' and bool(argv))
     if mutate:
         with control(name): result = request(name, q)
     else:

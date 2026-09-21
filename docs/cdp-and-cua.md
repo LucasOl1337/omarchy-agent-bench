@@ -6,6 +6,8 @@ Two ways to drive a page, both **inside** a named bench.
 
 `agent-bench cdp NAME` (or MCP `bench_cdp`) starts the bench, opens the bench Chromium if needed, and prints:
 
+`agent-bench browser-status NAME` performs a read-only location check. It resolves the profile lock, verifies that the PID belongs to `agent-bench@NAME.service`, and only then inspects the endpoint. Browser startup requires an existing `chromium/Default` under that bench; it never seeds from another profile or creates an empty fallback.
+
 ```json
 {
   "status": "conectado",

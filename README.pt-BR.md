@@ -34,9 +34,12 @@ O instalador copia para `~/.local/share/omarchy-agent-bench`, liga `~/.local/bin
 
 ```sh
 agent-bench ensure demo
+agent-bench browser-status demo
 agent-bench cdp demo
 agent-bench browser demo https://example.com
 ```
+
+Os comandos de navegador exigem que `desktop/sessions/demo/chromium/Default` já tenha sido preparado para essa bancada. Eles validam o PID e o cgroup antes de expor CDP; não copiam cookies, não criam perfil vazio e não usam o Chromium humano como fallback.
 
 Acompanhe com **Super+6** … **Super+9**, **Super+0** (workspace 10) ou o painel **Bancada dos agentes**. Super+6 só visita (o agente continua). **Super+Alt+A** / **Assumir controle** para clicar e digitar; **Super+1** no mesmo monitor devolve sozinho. O clipboard permanece separado.
 
