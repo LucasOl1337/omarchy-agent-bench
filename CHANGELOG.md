@@ -2,7 +2,13 @@
 
 ## Unreleased
 
+## 0.2.0 — 2026-09-21
+
 - Visit-and-leave: Super+6 stays view-only; `agent-bench collaborate --here` / Super+Alt+A takes the focused viewer; leaving the reserved workspace (Super+1) auto-resumes the agent.
+- `browser-status` proves the Chromium PID belongs to the requested bench before exposing its CDP endpoint.
+- The MCP hub and CLI report workspace, control mode, browser location, task pressure, and actionable recovery errors.
+- Browser startup requires an already prepared `Default` profile in the named bench. It never copies cookies or creates an empty identity as fallback.
+- Human visit/close decisions are covered by unit tests, including workspaces 6–11 and viewer ownership.
 
 ## 0.1.0 — 2026-09-16
 

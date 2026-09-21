@@ -52,11 +52,14 @@ The installer copies into `~/.local/share/omarchy-agent-bench`, links `~/.local/
 
 ```sh
 agent-bench ensure demo
+agent-bench browser-status demo
 agent-bench cdp demo
 agent-bench browser demo https://example.com
 agent-bench screenshot demo /tmp/demo.png
 agent-bench list
 ```
+
+Browser commands require an already prepared `desktop/sessions/demo/chromium/Default` for that bench. They validate the PID and cgroup before exposing CDP; they do not copy cookies, create an empty profile, or fall back to the human Chromium.
 
 Visit the bench with **Super+6** … **Super+9**, **Super+0** (workspace 10), or **Agent benches** in the launcher. Super+6 is view-only: the agent keeps working. **Super+Alt+A** (or **Take control**) lets you click and type. **Super+1** on that monitor gives the bench back. Clipboard stays separate in both modes.
 

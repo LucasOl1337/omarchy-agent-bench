@@ -8,7 +8,7 @@ BASE = Path(__file__).resolve().parent
 
 BASE = Path(__file__).resolve().parent
 TOOLS = {
-    'Navegação e interface': [('chromium', 'Navegador com perfil exclusivo: agent-bench browser NOME'), ('cua-driver', 'Mouse, teclado e visão: agent-bench-mcp ou agent-bench mcp NOME'), ('playwright', 'CDP da bancada: agent-bench cdp NOME'), ('xdotool', 'Entrada X11: somente via agent-bench exec'), ('xclip', 'Clipboard isolado: agent-bench clipboard NOME'), ('xterm', 'Terminal: agent-bench terminal NOME')],
+    'Navegação e interface': [('chromium', 'Navegador com perfil persistente exclusivo e autenticação inicial dos agentes: agent-bench browser NOME [--isolado]'), ('cua-driver', 'Mouse, teclado e visão: agent-bench-mcp ou agent-bench mcp NOME'), ('playwright', 'CDP da bancada: agent-bench cdp NOME'), ('xdotool', 'Entrada X11: somente via agent-bench exec'), ('xclip', 'Clipboard isolado: agent-bench clipboard NOME'), ('xterm', 'Terminal: agent-bench terminal NOME')],
     'Código e dados': [('python', 'Scripts e análise'), ('node', 'JavaScript e ferramentas web'), ('git', 'Controle de versões'), ('rg', 'Buscar texto'), ('fd', 'Localizar arquivos'), ('jq', 'Consultar JSON'), ('curl', 'HTTP e APIs'), ('sqlite3', 'Consultar bancos SQLite'), ('nvim', 'Editar arquivos no terminal')],
     'Imagens e documentos': [('ffmpeg', 'Vídeo e áudio'), ('tesseract', 'OCR de imagens'), ('magick', 'Processar imagens'), ('pdftotext', 'Extrair texto de PDF'), ('pdftoppm', 'Renderizar páginas PDF')],
 }

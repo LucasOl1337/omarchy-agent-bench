@@ -1,4 +1,5 @@
 import os
+from contextlib import nullcontext
 import tempfile
 import time
 import unittest
@@ -10,11 +11,43 @@ from bench_hub_mcp import HUB_TOOLS, handle_hub, inject_bench_schema
 
 
 class ChromiumFlags(unittest.TestCase):
-    def test_password_store_is_basic(self):
+    def test_browser_always_uses_bench_directory(self):
         argv = ops.chromium_argv('/tmp/state')
+        self.assertIn('--user-data-dir=/tmp/state/chromium', argv)
         self.assertIn('--password-store=basic', argv)
-        self.assertTrue(any(a.startswith('--user-data-dir=') for a in argv))
         self.assertEqual(argv[-1], 'about:blank')
+
+    def test_existing_browser_only_receives_owned_url(self):
+        snap = {'status': 'conectado', 'port': 4321, 'lives_in': 'teste'}
+        with patch.object(ops, 'control', return_value=nullcontext()), \
+             patch.object(ops, 'require_bench_profile'), \
+             patch.object(ops, 'bench_browser_snapshot', return_value=snap), \
+             patch.object(ops, 'open_personal_tab') as new_tab, \
+             patch.object(ops, 'request') as request:
+            self.assertEqual(ops.open_browser('teste', {'state': '/tmp/bench'}, ['https://example.com/']), snap)
+            new_tab.assert_called_once_with(snap, 'https://example.com/')
+            request.assert_not_called()
+
+    def test_launch_never_passes_task_url_until_ownership_verified(self):
+        connected = {'status': 'conectado', 'port': 1, 'profile': 'bancada', 'lives_in': 'teste'}
+        with patch.object(ops, 'control', return_value=nullcontext()), \
+             patch.object(ops, 'require_bench_profile'), \
+             patch.object(ops, 'bench_browser_snapshot', side_effect=[{'status': 'fechado'}, connected, connected]), \
+             patch.object(ops, 'open_personal_tab') as new_tab, \
+             patch.object(ops, 'request') as request:
+            ops.open_browser('teste', {'state': '/tmp/bench'}, ['https://example.com/'])
+            self.assertIn('--user-data-dir=/tmp/bench/chromium', request.call_args.args[1]['argv'])
+            self.assertEqual(request.call_args.args[1]['argv'][-1], 'about:blank')
+            new_tab.assert_called_once_with(connected, 'https://example.com/')
+
+    def test_no_cdp_does_not_launch_over_existing_process(self):
+        with patch.object(ops, 'control', return_value=nullcontext()), \
+             patch.object(ops, 'require_bench_profile'), \
+             patch.object(ops, 'bench_browser_snapshot', return_value={'status': 'fechado', 'pid': 5}), \
+             patch.object(ops, 'request') as request:
+            with self.assertRaises(RuntimeError):
+                ops.open_browser('teste', {'state': '/tmp/bench'})
+            request.assert_not_called()
 
 
 class Owner(unittest.TestCase):
@@ -45,7 +78,7 @@ class Reaper(unittest.TestCase):
     def test_busy_chromium_is_kept(self):
         with patch.object(ops, 'chromium_busy', return_value=True), \
              patch.object(ops, 'last_activity', return_value=0):
-            self.assertFalse(ops.should_reap('login-job', now=time.time()))
+            self.assertFalse(ops.should_reap('dailywork-candidaturas', now=time.time()))
 
     def test_idle_blank_is_reaped(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -60,7 +93,7 @@ class Gc(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             with patch.object(ops, 'STATE', root), patch.object(ops, 'RUNTIME', Path('/tmp/no-runtime')):
-                keep = root / 'login-job'
+                keep = root / 'dailywork-candidaturas'
                 keep.mkdir()
                 (keep / '.keep').write_text('login')
                 fresh = root / 'fresh-task'
@@ -70,7 +103,7 @@ class Gc(unittest.TestCase):
                 os.utime(old, (1, 1))
                 result = ops.gc_sessions(days=1, apply=False)
                 names = {row['name']: row['reason'] for row in result['kept']}
-                self.assertEqual(names['login-job'], '.keep')
+                self.assertEqual(names['dailywork-candidaturas'], '.keep')
                 self.assertTrue(any(row['name'] == 'old-promo' for row in result['removed']))
                 self.assertTrue(old.exists())
 

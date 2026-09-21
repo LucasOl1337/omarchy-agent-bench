@@ -22,20 +22,21 @@ HUB_TOOLS = [
      'Garante a bancada agent-bench (sobe se preciso, devolve viewer, opcionalmente abre Chromium). Toda navegação visual nesta máquina usa uma bancada, workspaces 6–11.',
      'inputSchema': {'type': 'object', 'properties': {
          'bench': {'type': 'string', 'description': 'Nome da bancada (minúsculas, hífen).'},
-         'browser': {'type': 'boolean', 'description': 'Abrir Chromium da bancada se ainda fechado.'},
-         'url': {'type': 'string', 'description': 'URL para abrir no Chromium da bancada.'}},
+         'browser': {'type': 'boolean', 'description': 'Abrir o Chromium persistente previamente preparado e exclusivo desta bancada.'},
+         'url': {'type': 'string', 'description': 'URL para abrir numa aba própria.'},
+         'isolated': {'type': 'boolean', 'description': 'Compatibilidade legada; perfis vazios não são criados automaticamente.'}},
          'required': ['bench']}},
     {'name': 'bench_list', 'description': 'Lista bancadas ativas, workspace, controle e dono.',
      'inputSchema': {'type': 'object', 'properties': {}}},
     {'name': 'bench_doctor', 'description': 'Diagnóstico da bancada: display, workspace 6–11, CDP, controle.',
      'inputSchema': {'type': 'object', 'properties': {'bench': {'type': 'string'}}, 'required': ['bench']}},
     {'name': 'bench_cdp', 'description':
-     'Endpoint CDP do Chromium da bancada. Use Playwright connectOverCDP neste URL, nunca no Chromium humano.',
+     'Endpoint CDP exclusivo do Chromium persistente desta bancada, com processo e diretório validados. Use Playwright connectOverCDP neste URL só em abas suas.',
      'inputSchema': {'type': 'object', 'properties': {
-         'bench': {'type': 'string'}, 'url': {'type': 'string'}}, 'required': ['bench']}},
-    {'name': 'bench_browser', 'description': 'Abre o Chromium com perfil exclusivo da bancada.',
+         'bench': {'type': 'string'}, 'url': {'type': 'string'}, 'isolated': {'type': 'boolean'}}, 'required': ['bench']}},
+    {'name': 'bench_browser', 'description': 'Abre o Chromium persistente previamente preparado e exclusivo da bancada. Nunca reutiliza a origem ou outro display.',
      'inputSchema': {'type': 'object', 'properties': {
-         'bench': {'type': 'string'}, 'url': {'type': 'string'}}, 'required': ['bench']}},
+         'bench': {'type': 'string'}, 'url': {'type': 'string'}, 'isolated': {'type': 'boolean'}}, 'required': ['bench']}},
     {'name': 'bench_screenshot', 'description': 'Captura a tela da bancada para um PNG absoluto.',
      'inputSchema': {'type': 'object', 'properties': {
          'bench': {'type': 'string'}, 'path': {'type': 'string'}}, 'required': ['bench', 'path']}},
@@ -60,8 +61,27 @@ HUB_TOOLS = [
 ]
 
 
+NON_STANDARD_FORMATS = {'uint8', 'uint16', 'uint32', 'uint64', 'int8', 'int16', 'int32', 'int64',
+                        'float', 'double', 'usize', 'isize'}
+
+
+def strip_non_standard_formats(node):
+    """Remove `format: uint32` e afins (schemars) que fazem OpenCode/ajv logar
+    'unknown format ... ignored in schema' 88 vezes por boot. Recursivo, sem mudar o resto."""
+    if isinstance(node, dict):
+        out = {}
+        for key, value in node.items():
+            if key == 'format' and isinstance(value, str) and value in NON_STANDARD_FORMATS:
+                continue
+            out[key] = strip_non_standard_formats(value)
+        return out
+    if isinstance(node, list):
+        return [strip_non_standard_formats(item) for item in node]
+    return node
+
+
 def inject_bench_schema(tool):
-    schema = dict(tool.get('inputSchema') or {'type': 'object', 'properties': {}})
+    schema = strip_non_standard_formats(dict(tool.get('inputSchema') or {'type': 'object', 'properties': {}}))
     props = dict(schema.get('properties') or {})
     if 'bench' not in props:
         props['bench'] = {'type': 'string',
@@ -70,6 +90,8 @@ def inject_bench_schema(tool):
     updated = dict(tool)
     schema_copy = dict(schema)
     updated['inputSchema'] = schema_copy
+    if 'outputSchema' in updated:
+        updated['outputSchema'] = strip_non_standard_formats(updated['outputSchema'])
     return updated
 
 
@@ -107,7 +129,7 @@ def handle_hub(name, arguments):
     owner = args.get('owner') or infer_owner()
     if name == 'bench_ensure':
         return ensure(bench, owner=owner, browser=bool(args.get('browser') or args.get('url')),
-                      url=args.get('url'))
+                      url=args.get('url'), isolated=bool(args.get('isolated')))
     if name == 'bench_list':
         return list_benches_simple()
     if name == 'bench_doctor':
@@ -120,13 +142,13 @@ def handle_hub(name, arguments):
             view = {}
         return inspect(bench, {**info, 'state': info.get('state', str(paths(bench)[1]))}, view)
     if name == 'bench_cdp':
-        info = ensure(bench, owner=owner, browser=True, url=args.get('url'))
+        info = ensure(bench, owner=owner, browser=True, url=args.get('url'), isolated=bool(args.get('isolated')))
         snap = info.get('cdp') or wait_cdp(info.get('state', paths(bench)[1]))
         if snap.get('status') != 'conectado':
-            raise RuntimeError('Chromium da bancada sem CDP. Tente bench_browser.')
+            raise RuntimeError('Chromium sem CDP. Tente bench_browser.')
         return snap
     if name == 'bench_browser':
-        return ensure(bench, owner=owner, browser=True, url=args.get('url'))
+        return ensure(bench, owner=owner, browser=True, url=args.get('url'), isolated=bool(args.get('isolated')))
     if name == 'bench_screenshot':
         info = ensure(bench, owner=owner)
         from pathlib import Path
