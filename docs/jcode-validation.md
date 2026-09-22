@@ -42,7 +42,7 @@ external submission, authenticated-page content, or live profile is in this doc.
 
 `python3 -m unittest test_bench_list test_hub_discovery test_hub_clipboard`
 passed all 28 tests from `desktop/`. This is targeted regression evidence,
-not a new full-suite run.
+followed by the broader checks below.
 
 The prior stability log was reconciled to 346 samples per bench from 05:14 to
 10:59 UTC. Both monitored principal cgroups had no failed probes or OOM events
@@ -60,3 +60,47 @@ browsers are currently running.
 Native AT-SPI Unicode remains a separate issue: the earlier corrected driver
 was validated in an isolated build, but the globally installed driver was not
 replaced. This browser fill check does not resolve that native-driver limitation.
+
+
+## Expanded verification and measurable improvement
+
+The complete default suite discovered 345 tests: 344 passed and one opt-in
+systemd test was skipped. That remaining test was then run separately with
+`AGENT_BENCH_RUN_SYSTEMD_TESTS=1` and passed. Thus all 345 distinct tests passed
+across the two commands. The integration test uses real transient non-graphical
+systemd units and JSON-only fake drivers. It proves lifecycle isolation, not
+real CUA endpoint validation or input. No test units remained afterward.
+
+Two fresh subprocesses of the installed MCP compared full and selected
+discovery. The compact UTF-8 JSON tools array fell from 75,942 bytes for 59 tools
+to 263 bytes for `bench_list` alone, about 99.65% smaller, while preserving its
+exact schema. This is a measured catalog-size improvement, not a model-token
+or navigation-latency claim.
+
+The selected real MCP process rejected malformed JSON, invalid parameters, and
+an excluded `bench_ensure` call, then successfully processed a valid list call
+on the same connection. The excluded bench directory was never created. Both
+processes exited successfully. The local evidence contains raw protocol replies
+and the runnable verifier, not merely assertions in this document.
+
+| Requirement or risk | Observed check and result | Boundary |
+| --- | --- | --- |
+| Continue work through Jcode without the Codex extension | MCP open/observe/fill/click, independent CLI assertion, screenshot, and owned-tab cleanup passed | Synthetic page in real Chromium |
+| Current runtime discovery and less irrelevant context | Fresh installed MCP returned current schema, selected array 75,942 to 263 bytes | Does not reload other clients |
+| Errors must not break connection or create excluded resources | Real subprocess malformed JSON/params and excluded ensure rejected, subsequent list passed, no bench created | Read-only failure cases |
+| Preserve neighbors during transport cleanup | Real systemd parent stop removed only its fake driver, neighboring driver still answered, final units absent | Fake drivers, real service manager |
+| Browser reference and frame safety | 77 browser tests passed, including stale documents, nested lineage, overlays, reparenting and navigation races | Synthetic CDP fixtures, not all live sites |
+| Native isolation and uncertain input | Native, private-environment, uinput and bridge cases passed, including foreign PID refusal, timeouts and no replay | Not a new native Unicode acceptance test |
+| Safe packaging and profile retention | 12 installation staging tests and 31 profile tests passed, including real CLI fixture, locks, copy races, corruption and symlink escape | Installer not run over live installation |
+| Human control and workspace restrictions | Handoff/recovery/location tests passed, including no human-workspace allocation and foreign browser refusal | No interaction with human desktop |
+| Overnight claims match recorded coverage | All 346 samples reconciled, no non-ok probes or OOM in covered cgroups | Gap in active agent judgment remains explicit |
+
+The journal subsequently established an orderly service stop at 12:15:58 UTC,
+after the browser proof and tab cleanup. It did not establish who requested the
+stop. This narrows the incident from unexplained process absence to a recorded
+stop, without authorizing automatic restart.
+
+The local round retains `full-tests.log`, `systemd-integration.log`,
+`test-coverage-index.json`, `mcp-protocol-results.json`, and
+`bench-stop-journal.log`. The continuation workflow is validated, but the wider
+goal of universal autonomous desktop operation remains only partially covered.
