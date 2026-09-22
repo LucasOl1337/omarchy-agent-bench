@@ -62,7 +62,7 @@ for path in prefix.rglob('*'):
 
 bindir = home / '.local/bin'
 bindir.mkdir(parents=True, exist_ok=True)
-for name in ('agent-bench', 'agent-bench-mcp'):
+for name in ('agent-bench', 'agent-bench-mcp', 'agent-bench-native'):
     target = bindir / name
     if target.is_symlink() or target.exists():
         target.unlink()

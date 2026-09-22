@@ -1,5 +1,9 @@
 # Bancadas de agentes — workspaces 6–11
 
+Para browser convencional sem CDP, leitura AT-SPI e entrada nativa, consulte
+[o guia opt-in](../docs/browser-native-agent-guide.pt-BR.md). A rota preserva
+sessões existentes e não promete aceitação de login sem validação no serviço.
+
 Toda navegação e operação visual dos agentes acontece em uma bancada, inclusive CDP, Playwright e browsers embutidos. O harness continua no lugar; a bancada fornece display, teclado, mouse, clipboard e D-Bus próprios. Arquivos e APIs continuam acessíveis normalmente.
 
 ## Para o humano
