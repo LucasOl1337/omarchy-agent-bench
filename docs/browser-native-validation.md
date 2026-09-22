@@ -1,5 +1,13 @@
 # Native browser validation, 2026-09-22
 
+**Latest state, 13:26 UTC:** the native browser was reopened for the real login
+acceptance path. Google's account chooser contains multiple remembered
+identities, including multiple entries for the user, all signed out. No identity
+was guessed or selected and no credentials were entered. The bench remains open
+in workspace 10 with only the pending Google login tab. The human must select
+the intended account and authenticate before this acceptance test can finish.
+This is a concrete blocker, not evidence that removing CDP fixed authentication.
+
 ## Outcome and scope
 
 An opt-in conventional Chromium launcher is implemented and installed on the
@@ -25,7 +33,7 @@ isolation guards. All input and captures stayed inside this bench.
 | Native click and Unicode input | Current AT-SPI element tokens, native click, bench clipboard readback and Ctrl+V | Local output exactly `Persistido: Ação rápida: São Paulo ✓ café 123`. Clicks 154–158 ms, paste 23 ms in measured sequence |
 | Real public page workflow | Wikipedia portal, field focus via observed AT-SPI bounds, native clipboard/keyboard, exact field readback, Return | `Browser automation` searched and navigated to `Headless browser - Wikipedia`, with the redirect link observed in the article tree. Focus/replace command measured 231 ms |
 | Persist after browser restart | Cooperative Alt+F4, status closed, same-profile open, rediscovered new PID/window, AT-SPI readback | Exact localStorage test string survived Chromium restart. This is storage persistence, not authenticated-session persistence |
-| Real Google entry | Open `https://accounts.google.com/` in the native browser, observe via AT-SPI | Reached `Choose an account`. No matching `secure` error text on that initial screen. No account selected, password submitted, MFA attempted or login claimed |
+| Real Google entry | Open `https://accounts.google.com/` in the native browser, observe via AT-SPI | Reached `Choose an account`. Remembered identities were all signed out and the intended account was ambiguous. No matching `secure` error text on that initial screen. No account selected, password submitted, MFA attempted or login claimed |
 | Preserve existing debugging sessions | Native status on existing `padrao` | Refused with `browser_not_native`, exit 1, session preserved |
 | Missing identity must fail closed | Native status on absent profile | `profile_missing`, exit 1, no session directory created |
 | Do not trust dispatch as effect | CUA `type_text` on Wikipedia | Returned success but field stayed empty. Reconciled before retry. Verified bench clipboard/X11 path succeeded instead |
@@ -63,8 +71,9 @@ not substitutes for the public-page and native-process checks above.
 ## Limits and next action
 
 The remaining acceptance step for the original login complaint is one controlled
-login to an affected service in this conventional browser, using the authorized
-account and pausing for personal verification when requested. No repeated login
+login to an affected service in this conventional browser. The Google chooser
+does not identify a unique authorized account for this test, so the human must
+select the intended identity and complete personal verification. No repeated login
 attempts were made and no credentials were read from profiles. The existing
 `password-store=basic` convention is retained, not repaired or migrated.
 
@@ -82,10 +91,18 @@ an initial-screen check, not completed authentication.
 
 ## Cleanup and checkpoint
 
-The Google and Wikipedia tabs were closed after inspection. The test browser
+At the end of the first validation, Google and Wikipedia tabs were closed. The test browser
 was closed cooperatively and its dedicated MCP client disconnected. Only the
 owned test bench and localhost fixture server were stopped. The prepared
 `browser-normal-922` profile is retained with the test localStorage value, no
 unsaved form or uncertain external submission. To continue the real login
-acceptance, reopen this named bench through the native launcher and use its
-freshly observed window identifiers. Other active benches were not restarted.
+acceptance, use freshly observed window identifiers. Other active benches were
+not restarted.
+
+The subsequent login-acceptance follow-up reopened the same native browser.
+It now remains on the pending account chooser in workspace 10. No test fixture
+tabs remain, and the fixture server and temporary MCP clients are stopped.
+The private checkpoint is `native-login-checkpoint.json` under this bench's
+session directory. It records only the phase, ambiguity and next action, not
+email addresses, passwords or tokens. Full private chooser observations were
+removed after recording this content-minimized checkpoint.
