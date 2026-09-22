@@ -37,6 +37,31 @@ isolation guards. All input and captures stayed inside this bench.
 | Preserve existing debugging sessions | Native status on existing `padrao` | Refused with `browser_not_native`, exit 1, session preserved |
 | Missing identity must fail closed | Native status on absent profile | `profile_missing`, exit 1, no session directory created |
 | Do not trust dispatch as effect | CUA `type_text` on Wikipedia | Returned success but field stayed empty. Reconciled before retry. Verified bench clipboard/X11 path succeeded instead |
+| Package new command | Real `install.sh --no-enable --no-skills --no-hypr` in a temporary HOME and prefix | Installer exit 0, executable symlink resolved to installed CLI, `--help` exit 0. Installed `status` refused missing profile with JSON/exit 1 and created no profile. No live units or human configuration touched |
+| Reuse without duplicate page | Installed `open browser-normal-922` without URL, before/after status | Same PID, `action:reused`, `url_delivery:not_requested`. Pending Google tab preserved |
+| Reject unsafe public input | Installed CLI with option-like URL, JavaScript URL, credential-bearing URL and absent profile | All refused with structured JSON/exit 1 before navigation. Runtime module still byte-identical to source |
+
+## Public contract and regression mapping
+
+The changed interfaces are the new CLI/module, its installer symlink and the
+operation guides. Existing CDP/MCP interfaces were not changed.
+
+| Contract | Named unit checks in `test_browser_native.py` | Additional observed evidence |
+| --- | --- | --- |
+| `--help` / `status` are read-only and report explicit capabilities | `test_help_does_not_start_inspect_or_mutate`, `test_closed_status_is_read_only_and_never_probes_cdp`, `test_status_offline_does_not_create_runtime`, `test_cli_json_and_nonzero_errors` | Installed CLI help/status, live identity, closed identity and absent profile exercised |
+| Existing profile/binary identity only, no fallback | `test_missing_default_never_starts_or_creates_profile`, `test_linked_default_refused`, `test_invalid_explicit_binary_has_no_fallback`, `test_elf_wrapper_is_rejected_even_with_fake_resources` | Official seed prepared once, direct packaged executable observed, existing CDP browser refused |
+| PID, cgroup, display and argv remain bound to bench | `test_external_and_other_bench_process_refused_before_start`, `test_explicit_display_overrides_refused_even_with_valid_or_erased_env`, `test_wrong_profile_and_duplicate_flags_refused`, `test_process_start_time_change_refused` | Real singleton/cgroup and MCP window discovered in workspace 10, display :84 |
+| Erased environment is disclosed, not fabricated | `test_erased_environment_reports_inferred_display_not_verified_env`, `test_partial_environment_cannot_claim_erased_environment_fallback`, `test_verified_environment_report_is_distinct` | Real Chromium cleared environ, CLI reports inferred source and `env_verified:false` |
+| `open` delivers once and preserves uncertainty | `test_initial_launch_url_exactly_once_no_extra_blank`, `test_existing_native_without_url_never_launches_again`, `test_launch_timeout_never_relaunches_or_removes_artifacts`, `test_lost_launch_reply_never_retries`, `test_unsafe_flags_observed_after_dispatch_report_url_uncertainty` | Initial launch, navigation via singleton, same-PID no-op and cooperative restart exercised |
+| Human control and concurrent mutation are guarded | `test_human_control_blocks_start_and_launch_but_not_status`, `test_control_gate_rechecked_after_start`, `test_server_human_state_blocks_mutation`, `test_mutations_serialized_without_wait_or_second_launch` | Existing control mechanism used for every real input. A real human takeover was not simulated or overridden |
+| Invalid URL / system startup errors return JSON without fallback | `test_invalid_urls_and_timeout_do_not_start`, `test_cli_start_subprocess_failure_is_json_without_launch` | Real negative CLI calls returned expected JSON/exit 1 |
+| Fast reading/input guide is usable and truthful | No guide claim relies only on unit tests | Wikipedia workflow passed through public interfaces. Failed `type_text` was documented, not presented as fixed. Google login remains blocked at identity selection |
+
+Whole-result recheck after the login follow-up: 392 tests executed, one skipped,
+suite successful in 6.641 seconds. The real installer and installed-CLI checks
+above were added to cover packaging and no-op/negative integration boundaries.
+They do not establish a successful login or a before/after improvement in a
+service's authentication acceptance rate.
 
 ## Defects found and corrected during validation
 
