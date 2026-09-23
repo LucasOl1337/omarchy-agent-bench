@@ -1,14 +1,20 @@
 """Multiplexed MCP: ensure + CDP + CUA routed to a named bench."""
+import argparse
 import json
+import math
 import os
 import signal
-import subprocess
 import sys
 import threading
+import time
 
-from bench_control import control
+from bench_control import RUNTIME, control, rpc
+from bench_transport import CuaChannel
+from bench_catalog import CatalogError, load_cua_tools
+from bench_native import guard_request, recheck_request, filter_response, available_tools, normalize_request
+from bench_web import WEB_TOOL, run as web_run
 from bench_ops import (cdp_snapshot, ensure, gc_sessions, infer_owner, load_owner,
-                       paths, request, wait_cdp)
+                       paths, request, wait_cdp, launch_cua, stop_cua, stop)
 
 READ_ONLY = frozenset(('list_apps', 'list_windows', 'get_window_state', 'verify_state',
     'clipboard_read', 'get_screen_size', 'get_desktop_state', 'get_cursor_position',
@@ -18,6 +24,7 @@ READ_ONLY = frozenset(('list_apps', 'list_windows', 'get_window_state', 'verify_
     'bench_cdp', 'bench_clipboard_get', 'bench_gc'))
 
 HUB_TOOLS = [
+    WEB_TOOL,
     {'name': 'bench_ensure', 'description':
      'Garante a bancada agent-bench (sobe se preciso, devolve viewer, opcionalmente abre Chromium). Toda navegação visual nesta máquina usa uma bancada, workspaces 6–11.',
      'inputSchema': {'type': 'object', 'properties': {
@@ -26,7 +33,7 @@ HUB_TOOLS = [
          'url': {'type': 'string', 'description': 'URL para abrir numa aba própria.'},
          'isolated': {'type': 'boolean', 'description': 'Compatibilidade legada; perfis vazios não são criados automaticamente.'}},
          'required': ['bench']}},
-    {'name': 'bench_list', 'description': 'Lista bancadas ativas, workspace, controle e dono.',
+    {'name': 'bench_list', 'description': 'Lista bancadas que respondem ao status, workspace atribuído quando disponível, controle reportado e rótulos de atores. Somente leitura; os rótulos não reservam a bancada.',
      'inputSchema': {'type': 'object', 'properties': {}}},
     {'name': 'bench_doctor', 'description': 'Diagnóstico da bancada: display, workspace 6–11, CDP, controle.',
      'inputSchema': {'type': 'object', 'properties': {'bench': {'type': 'string'}}, 'required': ['bench']}},
@@ -104,6 +111,14 @@ def jsonrpc_error_result(msg_id, text):
         'isError': True, 'content': [{'type': 'text', 'text': str(text)}]}}
 
 
+def request_error(msg, code, text):
+    if isinstance(msg, dict) and 'id' not in msg:
+        print('agent-bench-mcp:', text, file=sys.stderr)
+        return None
+    return {'jsonrpc': '2.0', 'id': msg.get('id') if isinstance(msg, dict) else None,
+            'error': {'code': code, 'message': text}}
+
+
 def public_status(payload):
     if not isinstance(payload, dict):
         return payload
@@ -123,8 +138,21 @@ def as_text(payload):
     return {'content': [{'type': 'text', 'text': text}]}
 
 
+def checked_clipboard_result(result, action):
+    if not isinstance(result, dict) or type(result.get('returncode')) is not int:
+        raise RuntimeError(f'CLIPBOARD_RESULT_INVALID: resposta inválida de {action}.')
+    if result['returncode'] != 0:
+        raise RuntimeError(f'CLIPBOARD_FAILED: {action} retornou código {result["returncode"]}. '
+                           'Confira o estado e o log da bancada antes de repetir a operação.')
+    if action == 'clipboard-get' and not isinstance(result.get('stdout'), str):
+        raise RuntimeError('CLIPBOARD_RESULT_INVALID: texto ausente ou inválido de clipboard-get.')
+    return result
+
+
 def handle_hub(name, arguments):
     args = arguments or {}
+    if name == 'bench_web':
+        return web_run(args)
     bench = args.get('bench', 'padrao')
     owner = args.get('owner') or infer_owner()
     if name == 'bench_ensure':
@@ -160,12 +188,13 @@ def handle_hub(name, arguments):
         return {'path': str(output)}
     if name == 'bench_clipboard_get':
         ensure(bench, owner=owner)
-        result = request(bench, {'action': 'clipboard-get'})
-        return {'text': result.get('stdout', '')}
+        result = checked_clipboard_result(request(bench, {'action': 'clipboard-get'}), 'clipboard-get')
+        return {'text': result['stdout']}
     if name == 'bench_clipboard_set':
         ensure(bench, owner=owner)
         with control(bench):
-            request(bench, {'action': 'clipboard-set', 'input': args.get('text', '')})
+            result = request(bench, {'action': 'clipboard-set', 'input': args.get('text', '')})
+        checked_clipboard_result(result, 'clipboard-set')
         return {'ok': True}
     if name == 'bench_exec':
         ensure(bench, owner=owner)
@@ -184,7 +213,7 @@ def handle_hub(name, arguments):
     if name == 'bench_stop':
         if bench == 'padrao':
             raise RuntimeError('padrao sobe no login; só encerre se o humano pedir.')
-        subprocess.run(['systemctl', '--user', 'stop', f'agent-bench@{bench}.service'], check=True)
+        stop(bench)
         return {'stopped': bench}
     if name == 'bench_gc':
         return gc_sessions(days=args.get('days'), apply=bool(args.get('apply')))
@@ -192,7 +221,11 @@ def handle_hub(name, arguments):
 
 
 class CuaPool:
-    def __init__(self):
+    def __init__(self, init_timeout=15, call_timeout=60):
+        if not 0 < init_timeout <= 300 or not 0 < call_timeout <= 300:
+            raise ValueError('prazos CUA devem estar entre 0 e 300 segundos')
+        self.init_timeout = init_timeout
+        self.call_timeout = call_timeout
         self.drivers = {}
         self.lock = threading.Lock()
 
@@ -207,14 +240,7 @@ class CuaPool:
             entry = self.drivers.pop(name, None)
         if not entry:
             return
-        proc = entry['proc']
-        if proc.poll() is None:
-            os.killpg(proc.pid, signal.SIGTERM)
-            try:
-                proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                os.killpg(proc.pid, signal.SIGKILL)
-                proc.wait()
+        stop_cua(entry['proc'])
 
     def driver(self, name):
         info = ensure(name, owner=infer_owner())
@@ -227,117 +253,184 @@ class CuaPool:
                     'HYPRLAND_INSTANCE_SIGNATURE', 'DBUS_SESSION_BUS_ADDRESS'):
             env.pop(key, None)
         env.update(info.get('env') or {})
-        proc = subprocess.Popen(['cua-driver', 'mcp', '--direct', '--no-overlay'], env=env,
-                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
-                               bufsize=1, start_new_session=True)
-        init_id = f'init-{name}'
-        proc.stdin.write(json.dumps({
-            'jsonrpc': '2.0', 'id': init_id, 'method': 'initialize',
-            'params': {'protocolVersion': '2024-11-05', 'capabilities': {},
-                       'clientInfo': {'name': 'agent-bench-mcp', 'version': '1'}}}) + '\n')
-        proc.stdin.flush()
-        tools = []
-        while True:
-            line = proc.stdout.readline()
-            if not line:
-                raise RuntimeError('cua-driver encerrou durante initialize')
-            msg = json.loads(line)
-            if msg.get('id') == init_id:
-                proc.stdin.write(json.dumps({'jsonrpc': '2.0', 'method': 'notifications/initialized'}) + '\n')
-                proc.stdin.flush()
-                list_id = f'list-{name}'
-                proc.stdin.write(json.dumps({'jsonrpc': '2.0', 'id': list_id, 'method': 'tools/list'}) + '\n')
-                proc.stdin.flush()
-                while True:
-                    listed = json.loads(proc.stdout.readline())
-                    if listed.get('id') == list_id:
-                        tools = listed.get('result', {}).get('tools', [])
-                        break
-                break
-        entry = {'proc': proc, 'tools': tools, 'io': threading.Lock()}
+        proc = launch_cua(name, env)
+        try:
+            tools, channel = self._initialize(proc, name)
+        except Exception:
+            stop_cua(proc)
+            raise
+        entry = {'proc': proc, 'tools': tools, 'channel': channel, 'io': threading.Lock()}
         with self.lock:
             previous = self.drivers.pop(name, None)
             self.drivers[name] = entry
-        if previous and previous['proc'].poll() is None:
-            old = previous['proc']
-            os.killpg(old.pid, signal.SIGTERM)
-            try:
-                old.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                os.killpg(old.pid, signal.SIGKILL)
-                old.wait()
+        if previous:
+            stop_cua(previous['proc'])
         return entry
 
+    def _initialize(self, proc, name):
+        channel = CuaChannel(proc)
+        deadline = time.monotonic() + self.init_timeout
+        init_id = f'init-{name}'
+        phase = 'initialize'
+        try:
+            channel.send({
+                'jsonrpc': '2.0', 'id': init_id, 'method': 'initialize',
+                'params': {'protocolVersion': '2024-11-05', 'capabilities': {},
+                           'clientInfo': {'name': 'agent-bench-mcp', 'version': '1'}}}, deadline)
+            initialized = channel.receive(init_id, deadline)
+            if 'error' in initialized:
+                raise RuntimeError('cua-driver recusou initialize')
+            phase = 'tools/list'
+            channel.send({'jsonrpc': '2.0', 'method': 'notifications/initialized'}, deadline)
+            list_id = f'list-{name}'
+            channel.send({'jsonrpc': '2.0', 'id': list_id, 'method': 'tools/list'}, deadline)
+            listed = channel.receive(list_id, deadline)
+            if 'error' in listed:
+                raise RuntimeError('cua-driver recusou tools/list')
+            return listed.get('result', {}).get('tools', []), channel
+        except TimeoutError as exc:
+            raise RuntimeError(f'CUA_INIT_TIMEOUT: {phase} não respondeu em {self.init_timeout}s; '
+                               'nenhuma ação da tarefa foi enviada.') from exc
+
     def call(self, name, msg):
+        msg = normalize_request(msg)
+        guard = guard_request(name, msg)
         entry = self.driver(name)
         with entry['io']:
-            entry['proc'].stdin.write(json.dumps(msg) + '\n')
-            entry['proc'].stdin.flush()
-            while True:
-                line = entry['proc'].stdout.readline()
-                if not line:
-                    raise RuntimeError('cua-driver sem resposta')
-                reply = json.loads(line)
-                if 'id' in reply and reply.get('id') == msg.get('id'):
-                    return reply
+            recheck_request(guard)
+            deadline = time.monotonic() + self.call_timeout
+            try:
+                entry['channel'].send(msg, deadline)
+                reply = entry['channel'].receive(msg.get('id'), deadline)
+            except (OSError, RuntimeError, ValueError) as exc:
+                with self.lock:
+                    if self.drivers.get(name) is entry:
+                        del self.drivers[name]
+                try:
+                    stop_cua(entry['proc'])
+                except Exception as cleanup:
+                    print('agent-bench-mcp cleanup:', cleanup, file=sys.stderr)
+                    cleanup_note = ' Encerramento da unidade não foi confirmado.'
+                else:
+                    cleanup_note = ''
+                tool = msg.get('params', {}).get('name')
+                mutation = msg.get('method') == 'tools/call' and tool not in READ_ONLY
+                if mutation:
+                    raise RuntimeError('CUA_RESULTADO_INCERTO: falha no transporte após tentar enviar a ação; '
+                                       'ela pode ter sido executada. Observe o estado antes de decidir o próximo '
+                                       'passo; não repita automaticamente.' + cleanup_note) from exc
+                code = 'CUA_TIMEOUT' if isinstance(exc, TimeoutError) else 'CUA_TRANSPORTE_FALHOU'
+                raise RuntimeError(f'{code}: leitura não retornou uma resposta completa; '
+                                   'driver removido do pool, sem repetição automática.' + cleanup_note) from exc
+            return filter_response(name, msg, reply, guard)
 
 
 def list_benches_simple():
-    from pathlib import Path
-    runtime = Path(f'/run/user/{os.getuid()}/agent-bench')
     found = []
-    for sock in sorted(runtime.glob('*/control.sock')):
+    for sock in sorted(RUNTIME.glob('*/control.sock')):
         item = sock.parent.name
         try:
             status = request(item, {'action': 'status'}, timeout=1)
-        except (OSError, ValueError, RuntimeError):
+        except (OSError, ValueError, RuntimeError, TypeError):
+            continue
+        if not isinstance(status, dict):
             continue
         record = {k: status.get(k) for k in ('name', 'display', 'geometry', 'control_mode')}
-        record['owner'] = load_owner(item).get('owner')
+        owner = load_owner(item)
+        record['owner'] = owner.get('owner')
+        try:
+            view = rpc(RUNTIME / 'views.sock', {'action': 'status', 'name': item}, timeout=1)
+        except (OSError, ValueError, RuntimeError, TypeError):
+            view = None
+        workspace = view.get('workspace') if isinstance(view, dict) else None
+        record['workspace'] = workspace if type(workspace) is int else None
+        version, origin = owner.get('metadata_version'), owner.get('owner_origin')
+        actor, seen = owner.get('last_actor'), owner.get('last_seen_at')
+        record['metadata_version'] = version if type(version) is int and version == 2 else None
+        record['owner_origin'] = origin if origin in ('legacy_label', 'first_observed_actor') else None
+        record['last_actor'] = actor if isinstance(actor, str) and actor.strip() else None
+        record['last_seen_at'] = (seen if type(seen) in (int, float) and seen >= 0
+                                  and (type(seen) is int or math.isfinite(seen)) else None)
         found.append(record)
     return found
 
 
+class ToolSelectionError(ValueError):
+    pass
+
+
 class Hub:
-    def __init__(self):
-        self.cua = CuaPool()
+    def __init__(self, tools=None):
         self.cua_names = set()
+        self.allowed_tools = None
+        if tools is not None:
+            if (not isinstance(tools, (list, tuple)) or not tools
+                    or any(not isinstance(name, str) or not name.strip() for name in tools)):
+                raise ToolSelectionError('TOOLS_CONFIG_INVALID: --tools exige uma lista não vazia de nomes.')
+            self.allowed_tools = frozenset(tools)
+            try:
+                self.tools()  # Validate configuration before any pool/bench use.
+            except CatalogError as exc:
+                raise ToolSelectionError(f'TOOLS_CONFIG_INVALID: {exc}') from exc
+        self.cua = CuaPool()
 
     def tools(self):
-        tools = list(HUB_TOOLS)
-        try:
-            entry = self.cua.driver('padrao')
-            for tool in entry['tools']:
-                tools.append(inject_bench_schema(tool))
-                self.cua_names.add(tool['name'])
-        except (OSError, RuntimeError, ValueError, FileNotFoundError) as exc:
-            print('agent-bench-mcp cua:', exc, file=sys.stderr)
-        return tools
+        hub_names = {tool['name'] for tool in HUB_TOOLS}
+        hub_only = self.allowed_tools is not None and self.allowed_tools <= hub_names
+        native = [] if hub_only else available_tools(load_cua_tools())
+        tools = [inject_bench_schema(tool) for tool in native]
+        catalog = [*HUB_TOOLS, *tools]
+        if self.allowed_tools is not None:
+            missing = self.allowed_tools - {tool['name'] for tool in catalog}
+            if missing:
+                raise CatalogError('catalog_selection_invalid',
+                                   'ferramentas desconhecidas ou indisponíveis: ' + ', '.join(sorted(missing)))
+            catalog = [tool for tool in catalog if tool['name'] in self.allowed_tools]
+        self.cua_names = {tool['name'] for tool in catalog if tool['name'] not in hub_names}
+        return catalog
 
     def handle(self, msg):
+        if not isinstance(msg, dict):
+            return request_error(msg, -32600, 'NATIVE_REQUEST_INVALID: pedido MCP deve ser objeto JSON.')
         method = msg.get('method')
         msg_id = msg.get('id')
+        if method == 'tools/call' and 'id' not in msg:
+            return request_error(msg, -32600, 'NATIVE_REQUEST_INVALID: tools/call exige id para confirmar conclusão sob o gate.')
+        params = msg.get('params', {})
+        if not isinstance(params, dict):
+            return request_error(msg, -32602, 'NATIVE_REQUEST_INVALID: params deve ser objeto JSON.')
         if method == 'initialize':
             return jsonrpc_result(msg_id, {
-                'protocolVersion': msg.get('params', {}).get('protocolVersion', '2024-11-05'),
+                'protocolVersion': params.get('protocolVersion', '2024-11-05'),
                 'capabilities': {'tools': {}},
                 'serverInfo': {'name': 'agent-bench', 'version': '1'}})
         if method == 'notifications/initialized' or method is None:
             return None
         if method == 'tools/list':
-            return jsonrpc_result(msg_id, {'tools': self.tools()})
-        if method == 'tools/call':
-            params = msg.get('params') or {}
-            tool = params.get('name')
-            arguments = dict(params.get('arguments') or {})
             try:
+                return jsonrpc_result(msg_id, {'tools': self.tools()})
+            except CatalogError as exc:
+                return {'jsonrpc': '2.0', 'id': msg_id,
+                        'error': {'code': -32603, 'message': str(exc)}}
+        if method == 'tools/call':
+            tool = params.get('name')
+            arguments = params.get('arguments')
+            try:
+                if self.allowed_tools is not None and tool not in self.allowed_tools:
+                    return jsonrpc_error_result(msg_id, 'TOOL_NOT_ALLOWED: ferramenta fora da lista --tools deste hub.')
                 if tool in {t['name'] for t in HUB_TOOLS}:
-                    payload = public_status(handle_hub(tool, arguments))
+                    payload = public_status(handle_hub(tool, dict(arguments or {})))
                     return jsonrpc_result(msg_id, as_text(payload))
-                bench = arguments.pop('bench', 'padrao')
+                bench = 'padrao'
+                if isinstance(arguments, dict):
+                    arguments = dict(arguments)
+                    bench = arguments.pop('bench', bench)
                 ensure(bench, owner=infer_owner())
+                native_params = {'name': tool}
+                if 'arguments' in params:
+                    native_params['arguments'] = arguments
                 forwarded = {'jsonrpc': '2.0', 'id': msg_id, 'method': 'tools/call',
-                             'params': {'name': tool, 'arguments': arguments}}
+                             'params': native_params}
                 if tool not in READ_ONLY:
                     with control(bench):
                         return self.cua.call(bench, forwarded)
@@ -350,8 +443,8 @@ class Hub:
         return None
 
 
-def run():
-    hub = Hub()
+def run(tools=None):
+    hub = Hub(tools)
     def terminate(*_):
         hub.cua.close()
         raise SystemExit(0)
@@ -365,10 +458,22 @@ def run():
             try:
                 msg = json.loads(line)
             except ValueError:
-                continue
-            reply = hub.handle(msg)
+                reply = request_error(None, -32700, 'NATIVE_REQUEST_INVALID: JSON inválido.')
+            else:
+                reply = hub.handle(msg)
             if reply is not None:
                 sys.stdout.write(json.dumps(reply) + '\n')
                 sys.stdout.flush()
     finally:
         hub.cua.close()
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description='MCP das bancadas agent-bench.')
+    parser.add_argument('--tools', nargs='+', metavar='NAME',
+                        help='Lista explícita de ferramentas; omitida, mantém o catálogo completo.')
+    args = parser.parse_args(argv)
+    try:
+        return run(args.tools)
+    except ToolSelectionError as exc:
+        parser.error(str(exc))

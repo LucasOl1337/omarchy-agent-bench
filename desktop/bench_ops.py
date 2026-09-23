@@ -1,11 +1,17 @@
 """Shared bench operations for the CLI, MCP hub, reaper and tests."""
+from contextlib import contextmanager
+import fcntl
 import json
 import os
 from pathlib import Path
 import re
+import shutil
+import signal
 import socket
+import stat
 import subprocess
 import time
+import uuid
 from urllib.parse import quote, urlparse
 from urllib.request import ProxyHandler, Request, build_opener
 
@@ -13,12 +19,111 @@ from bench_control import RUNTIME, views, control
 
 BASE = Path(__file__).resolve().parent.parent
 STATE = BASE / 'desktop/sessions'
-IDLE_SECONDS = int(os.environ.get('AGENT_BENCH_IDLE_SECONDS', str(3 * 60 * 60)))
+IDLE_SECONDS = int(os.environ.get('AGENT_BENCH_IDLE_SECONDS', str(25 * 60)))
+# A bench that burned more CPU than this in the window is still working (a game,
+# a render, a long script) even without agent commands: about 3% of one core.
+IDLE_CPU_SECONDS = float(os.environ.get('AGENT_BENCH_IDLE_CPU_SECONDS', '20'))
+IDLE_CPU_WINDOW = 10 * 60
 GC_DAYS = int(os.environ.get('AGENT_BENCH_GC_DAYS', '30'))
-NEVER_REAP = frozenset({'padrao'})
+# Lucas, 23/09/2026: nothing stays open just because it is fixed; only what is in use.
+NEVER_REAP = frozenset()
+# The only logged-in profile. Everything else gets a throwaway one.
+VAULT = 'cofre'
+EPHEMERAL_MARK = '.efemero'
+CDP_PORT_BASE = 19000
 BLANK_URLS = ('about:blank', 'chrome://newtab/', 'chrome://new-tab-page/')
 MCP_BIN = BASE / 'bin/agent-bench-mcp'
 PROC = Path('/proc')
+CGROUP = Path('/sys/fs/cgroup')
+USER_RUNTIME_ROOT = Path('/run/user')
+
+
+def systemd_env():
+    """Find the local UID's manager bus without changing the bench's own D-Bus.
+
+    Harnesses may omit login variables or inherit the isolated Xvnc bus. Only
+    systemd clients receive this environment; never put it into os.environ.
+    """
+    uid = os.getuid()
+    runtime = USER_RUNTIME_ROOT / str(uid)
+    bus = runtime / 'bus'
+    try:
+        directory = runtime.lstat()
+        endpoint = bus.lstat()
+        if (not stat.S_ISDIR(directory.st_mode) or directory.st_uid != uid
+                or directory.st_mode & 0o022 or not stat.S_ISSOCK(endpoint.st_mode)
+                or endpoint.st_uid != uid):
+            raise ValueError('diretório ou socket não pertence ao usuário local')
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f'USER_BUS_INDISPONIVEL: socket local validado ausente em {bus}') from exc
+    env = os.environ.copy()
+    env.update(XDG_RUNTIME_DIR=str(runtime), DBUS_SESSION_BUS_ADDRESS=f'unix:path={bus}')
+    return env
+
+
+def bench_service(name):
+    return f'agent-bench@{valid(name)}.service'
+
+
+def stop(name):
+    return subprocess.run(['systemctl', '--user', 'stop', bench_service(name)],
+                          env=systemd_env(), check=True)
+
+
+def launch_cua(name, env):
+    """Pipe MCP through a private service stopped whenever its bench stops.
+
+    A process spawned by the harness is not in the bench's cgroup. A transient
+    service with BindsTo + After also handles stops from the CLI, viewer and
+    idle reaper, even if they run in another harness. The UUID prevents one
+    pool from stopping another pool's driver for the same bench.
+    """
+    from bench_cua_env import validate_cua_env
+    validate_cua_env(name, env)
+    service = bench_service(name)
+    unit = f'agent-bench-cua-{name}-{uuid.uuid4().hex}.service'
+    executable = shutil.which('cua-driver', path=env.get('PATH'))
+    if not executable:
+        raise RuntimeError('cua-driver não encontrado no PATH')
+    # Do not inherit the user manager's human DISPLAY/bus or send harness
+    # credentials to the unit. Carry only the bench desktop and tool context.
+    keys = ('HOME', 'PATH', 'LANG', 'LC_ALL', 'TMPDIR', 'AGENT_BENCH_NAME',
+            'DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR',
+            'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME',
+            'XDG_SESSION_TYPE', 'XDG_CURRENT_DESKTOP', 'GDK_BACKEND',
+            'QT_QPA_PLATFORM', 'GTK_USE_PORTAL', 'LIBGL_ALWAYS_SOFTWARE')
+    command = ['systemd-run', '--user', '--quiet', '--pipe', '--wait', '--collect',
+               '--service-type=exec', '--expand-environment=no', '--unit=' + unit,
+               '--property=BindsTo=' + service, '--property=After=' + service,
+               '--property=TimeoutStopSec=3s', '--property=KillMode=control-group',
+               '--', '/usr/bin/env', '-i',
+               *(f'{key}={env[key]}' for key in keys if key in env),
+               '/usr/bin/python3', '-I', '-S', str(BASE / 'desktop/bench_uinput_guard.py'),
+               str(Path(executable).resolve()), 'mcp', '--direct', '--no-overlay']
+    proc = subprocess.Popen(command, env=systemd_env(), stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, text=True, bufsize=1,
+                            start_new_session=True)
+    proc.bench_cua_unit = unit
+    return proc
+
+
+def stop_cua(proc):
+    """Stop only the unique unit this pool started, then reap its pipe client."""
+    # A dead systemd-run client is not proof its service stopped. Conversely,
+    # BindsTo may already have stopped and collected the unit (exit status 5).
+    result = subprocess.run(['systemctl', '--user', 'stop', proc.bench_cua_unit],
+                            env=systemd_env(), capture_output=True, text=True, timeout=10)
+    if result.returncode not in (0, 5):
+        raise RuntimeError(f'CUA_STOP_FALHOU: {result.stderr.strip()}')
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        # The unit is stopped already; this is solely our systemd-run client.
+        proc.kill()
+        proc.wait(timeout=5)
+    for stream in (proc.stdin, proc.stdout):
+        if stream:
+            stream.close()
 
 
 def valid(name):
@@ -53,26 +158,80 @@ def infer_owner():
     ):
         if os.environ.get(key):
             return label
-    return 'unknown'
+    return owner_from_ancestors() or 'unknown'
+
+
+HARNESSES = ('claude', 'codex', 'grok', 'hermes', 'jcode', 'opencode', 'gemini', 'cursor')
+
+
+def owner_from_ancestors(pid=None):
+    """Name the harness that runs this command by walking its parent processes.
+
+    Codex, Grok and jcode set no marker variable, so their benches showed "unknown".
+    """
+    pid = os.getppid() if pid is None else pid
+    for _ in range(40):
+        if pid <= 1:
+            return None
+        try:
+            args = [os.fsdecode(a) for a in (PROC / str(pid) / 'cmdline').read_bytes().split(b'\0') if a]
+            parent = int((PROC / str(pid) / 'stat').read_text().rsplit(')', 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            return None
+        names = [Path(a).name.lower() for a in args[:2]]
+        if names and names[0].startswith('electron') and any('Daily Work app' in a for a in args):
+            return 'dailywork'
+        for harness in HARNESSES:
+            if any(n == harness or n.startswith(harness + '-') or n.startswith(harness + '.') for n in names):
+                return harness
+        pid = parent
+    return None
 
 
 def claim_owner(name, owner=None):
+    """Record actors, without transferring ownership or granting a task lease."""
     owner = owner or infer_owner()
-    payload = {'owner': owner, 'claimed_at': time.time()}
     runtime, state = paths(name)
     for folder in (runtime, state):
         folder.mkdir(parents=True, exist_ok=True, mode=0o700)
-        (folder / 'owner.json').write_text(json.dumps(payload, indent=2) + '\n')
-    return payload
+    # The persistent record is authoritative from v2 onwards; runtime is only a
+    # compatibility mirror. Serialize first actors and publish whole JSON files.
+    with (state / 'owner.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        payload = load_owner(name)
+        now = time.time()
+        if not payload:
+            payload = {'owner': owner, 'claimed_at': now, 'owner_origin': 'first_observed_actor'}
+        elif payload.get('metadata_version') != 2:
+            # The old value meant last writer. Do not invent the original creator.
+            payload['owner_origin'] = 'legacy_label'
+        payload.update(metadata_version=2, last_actor=owner, last_seen_at=now)
+        for folder in (state, runtime):
+            temp = folder / ('owner.' + uuid.uuid4().hex + '.tmp')
+            try:
+                with temp.open('x') as output:
+                    os.chmod(temp, 0o600)
+                    output.write(json.dumps(payload, indent=2) + '\n')
+                temp.replace(folder / 'owner.json')
+            finally:
+                temp.unlink(missing_ok=True)
+        return payload
 
 
 def load_owner(name):
-    for candidate in (RUNTIME / name / 'owner.json', STATE / name / 'owner.json'):
+    def read(candidate):
         try:
-            return json.loads(candidate.read_text())
+            value = json.loads(candidate.read_text())
+            if isinstance(value, dict) and isinstance(value.get('owner'), str) and value['owner']:
+                return value
         except (OSError, ValueError):
-            continue
-    return {}
+            pass
+        return {}
+    runtime, state = paths(name)
+    persistent = read(state / 'owner.json')
+    if persistent.get('metadata_version') == 2:
+        return persistent
+    return read(runtime / 'owner.json') or persistent
 
 
 def touch_activity(name):
@@ -93,14 +252,20 @@ def last_activity(name):
             return None
 
 
-def chromium_argv(state, extra=None):
+def chromium_argv(state, extra=None, *, port):
     urls = extra if extra else ['about:blank']
     # Renderer cap: each renderer is ~15-20 threads and a mission with a hundred
     # tabs pushed a bench past its TasksMax on 18/09/2026. Past the cap Chromium
     # shares renderers between tabs instead of forking more.
+    # Stopping a bench kills Xvnc under Chromium; without this flag every next
+    # launch opens the "Restore pages?" bubble over the agent's work.
+    # Port 0 is how ChromeDriver launches, so Chromium sets navigator.webdriver for
+    # it; a fixed port does not. --disable-gpu removed WebGL entirely. Together they
+    # kept Cloudflare on "Verify you are human"; without them the managed challenge
+    # passed with a CDP client attached (bench test, 23/09/2026).
     base = ['chromium', '--ozone-platform=x11', '--ozone-platform-hint=x11', '--no-first-run',
-            '--no-default-browser-check', '--disable-gpu', '--remote-debugging-port=0',
-            '--renderer-process-limit=24']
+            '--no-default-browser-check', f'--remote-debugging-port={int(port)}',
+            '--renderer-process-limit=24', '--hide-crash-restore-bubble']
     # Every process owns a distinct directory and uses its bench's isolated D-Bus.
     return [*base, '--password-store=basic', '--profile-directory=Default',
             '--user-data-dir=' + str(Path(state) / 'chromium'), *urls]
@@ -110,16 +275,98 @@ def _opener():
     return build_opener(ProxyHandler({}))
 
 
+def _main_chromium_pids(profile):
+    """Enumerate main processes naming this exact profile; never infer ownership from argv alone."""
+    profile_arg = ('--user-data-dir=' + str(profile)).encode()
+    result = []
+    try:
+        entries = list(PROC.iterdir())
+    except OSError:
+        return []
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            args = _process_args(entry)
+            if (Path(os.fsdecode(args[0])).name == 'chromium'
+                    and profile_arg in args and not any(arg.startswith(b'--type=') for arg in args)):
+                result.append(int(entry.name))
+        except (OSError, IndexError, ValueError):
+            continue
+    return result
+
+
+def _process_args(entry):
+    """Chromium rewrites its main process title into one space-joined string, so
+    /proc/PID/cmdline has no NUL separators there; its children keep them."""
+    raw = (entry / 'cmdline').read_bytes().rstrip(b'\0')
+    args = raw.split(b'\0')
+    if len(args) == 1 and b' --' in raw:
+        args = raw.split(b' ')
+    return args
+
+
+def _listener_inodes(port):
+    """Read TCP LISTEN inodes for 127.0.0.1:port from procfs, not an arbitrary CDP response."""
+    result = set()
+    for table in ('tcp', 'tcp6'):
+        try:
+            rows = (PROC / 'net' / table).read_text().splitlines()[1:]
+        except OSError:
+            continue
+        for row in rows:
+            fields = row.split()
+            try:
+                address, raw_port = fields[1].split(':')
+                if (int(raw_port, 16) == port and fields[3] == '0A'
+                        and address in ('0100007F', '00000000000000000000000001000000')):
+                    result.add(fields[9])
+            except (IndexError, ValueError):
+                continue
+    return result
+
+
+def _cdp_owner_matches(profile, pid, port):
+    pids = _main_chromium_pids(profile)
+    if pids != [pid]:
+        return False
+    inodes = _listener_inodes(port)
+    if not inodes:
+        return False
+    targets = {f'socket:[{inode}]' for inode in inodes}
+    try:
+        for fd in (PROC / str(pid) / 'fd').iterdir():
+            try:
+                if os.readlink(fd) in targets:
+                    return True
+            except OSError:
+                continue
+        return False
+    except OSError:
+        return False
+
+
 def cdp_snapshot(state, include_pages=True):
     endpoint = Path(state) / 'chromium/DevToolsActivePort'
     info = {'status': 'fechado', 'endpoint_file': str(endpoint)}
     if not endpoint.exists():
         return info
+    profile = Path(state) / 'chromium'
+    try:
+        owner = profile_process(profile)
+        if owner is None and _main_chromium_pids(profile):
+            return {**info, 'status': 'bloqueado', 'error': 'CHROMIUM_PERFIL_AMBIGUO: processo sem dono validado.'}
+        if owner and len(_main_chromium_pids(profile)) != 1:
+            return {**info, 'status': 'bloqueado', 'error': 'CHROMIUM_PERFIL_AMBIGUO: múltiplos processos principais no mesmo perfil.'}
+    except RuntimeError:
+        return {**info, 'status': 'bloqueado', 'error': 'CHROMIUM_PERFIL_AMBIGUO: dono do perfil não verificável.'}
     try:
         lines = endpoint.read_text().splitlines()
         port = int(lines[0])
         if not 1 <= port <= 65535:
             raise ValueError('porta inválida')
+        if owner and not _cdp_owner_matches(profile, owner['pid'], port):
+            return {**info, 'status': 'bloqueado', 'error': 'CHROMIUM_PERFIL_AMBIGUO: porta CDP não pertence ao dono do perfil.'}
         version = json.load(_opener().open(f'http://127.0.0.1:{port}/json/version', timeout=2))
         if not lines[1].startswith('/devtools/browser/') or urlparse(version.get('webSocketDebuggerUrl', '')).path != lines[1]:
             raise ValueError('endpoint pertence a outro processo')
@@ -148,7 +395,12 @@ def _pages_busy(snap):
 
 def chromium_busy(name):
     try:
-        return _pages_busy(bench_browser_snapshot(name))
+        snap = bench_browser_snapshot(name)
+        if snap.get('status') == 'fechado' and not snap.get('pid'):
+            return False
+        if snap.get('status') != 'conectado':
+            return True
+        return _pages_busy(snap)
     except RuntimeError:
         return True
 
@@ -193,6 +445,48 @@ def require_bench_profile(state):
     return profile
 
 
+def provide_bench_profile(state):
+    """Give a CDP bench its browser profile without copying anyone's identity.
+
+    Logged-in accounts live only in the vault, whose profile is never copied. Any
+    other bench gets an empty profile marked ephemeral, deleted when it stops.
+    Existing profiles, including the old seeded copies, are used as they are.
+    """
+    state = Path(state)
+    profile = state / 'chromium'
+    if not profile.is_dir():
+        profile.mkdir(parents=True, mode=0o700)
+        if state.name == VAULT:
+            (state / '.keep').write_text('cofre de contas do Lucas\n')
+        else:
+            (profile / EPHEMERAL_MARK).write_text('perfil descartável: apagado quando a bancada para\n')
+    return profile
+
+
+def cdp_port(info):
+    """One fixed CDP port per live bench, derived from its unique X display."""
+    display = str(info.get('display') or '')
+    if not re.fullmatch(r':\d+', display):
+        raise RuntimeError('CDP_PORTA_INDEFINIDA: bancada sem display conhecido.')
+    return CDP_PORT_BASE + int(display[1:])
+
+
+def publish_endpoint(state, port):
+    """A fixed port makes Chromium skip DevToolsActivePort; write it for the existing readers."""
+    profile = Path(state) / 'chromium'
+    owner = profile_process(profile)
+    if not owner or not _cdp_owner_matches(profile, owner['pid'], port):
+        return False
+    version = json.load(_opener().open(f'http://127.0.0.1:{port}/json/version', timeout=2))
+    path = urlparse(version.get('webSocketDebuggerUrl', '')).path
+    if not path.startswith('/devtools/browser/'):
+        return False
+    temp = profile / ('.DevToolsActivePort.' + uuid.uuid4().hex)
+    temp.write_text(f'{port}\n{path}\n')
+    temp.replace(profile / 'DevToolsActivePort')
+    return True
+
+
 def bench_browser_snapshot(name, include_pages=True):
     _, state = paths(name)
     profile = state / 'chromium'
@@ -209,6 +503,9 @@ def bench_browser_snapshot(name, include_pages=True):
     if location != name:
         return {**meta, 'status': 'bloqueado', 'error':
                 f'CHROMIUM_FORA_DA_BANCADA: perfil pertence a {location}; solicitado {name}.'}
+    if len(_main_chromium_pids(profile)) != 1:
+        return {**meta, 'status': 'bloqueado', 'error':
+                'CHROMIUM_PERFIL_AMBIGUO: múltiplos processos principais no mesmo perfil.'}
     return {**cdp_snapshot(state, include_pages=include_pages), **meta}
 
 
@@ -217,22 +514,48 @@ def open_personal_tab(snap, url):
     return json.load(_opener().open(Request(target, method='PUT'), timeout=5))
 
 
+@contextmanager
+def browser_launch_lock(state):
+    # control() holds input.lock shared, so concurrent ensures all saw "fechado"
+    # and each launched Chromium on the same profile (23/09/2026: three at once,
+    # CDP file pointing at a process that did not own the profile lock).
+    Path(state).mkdir(parents=True, exist_ok=True, mode=0o700)
+    with (Path(state) / 'browser.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
 def open_browser(name, info, urls=None, isolated=False):
     """Open the persistent Chromium that was explicitly prepared for this bench."""
     state = info['state']
-    with control(name):
+    with control(name), browser_launch_lock(state):
         if isolated:
             raise RuntimeError('CHROMIUM_PERFIL_AUSENTE: --isolado não cria perfil vazio; prepare o perfil da bancada.')
-        require_bench_profile(state)
+        provide_bench_profile(state)
         snap = bench_browser_snapshot(name)
         if snap.get('status') == 'bloqueado':
             raise RuntimeError(snap['error'])
+        if snap.get('status') != 'conectado' and snap.get('pid'):
+            # Fixed-port browser whose endpoint file was never written or was lost.
+            try:
+                if publish_endpoint(state, cdp_port(info)):
+                    snap = bench_browser_snapshot(name)
+            except (OSError, ValueError, RuntimeError):
+                pass
         if snap.get('status') != 'conectado':
             if snap.get('pid'):
                 raise RuntimeError('Chromium da bancada está aberto sem CDP. Preserve a sessão.')
-            request(name, {'action': 'launch', 'argv': chromium_argv(state), 'cwd': str(Path.cwd())})
+            port = cdp_port(info)
+            if _listener_inodes(port):
+                raise RuntimeError(f'CDP_PORTA_OCUPADA: a porta {port} desta bancada já está em uso.')
+            (Path(state) / 'chromium/DevToolsActivePort').unlink(missing_ok=True)
+            request(name, {'action': 'launch', 'argv': chromium_argv(state, port=port), 'cwd': str(Path.cwd())})
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
+                try:
+                    publish_endpoint(state, port)
+                except (OSError, ValueError, RuntimeError):
+                    pass
                 snap = bench_browser_snapshot(name)
                 if snap.get('status') == 'bloqueado':
                     raise RuntimeError(snap['error'])
@@ -259,12 +582,16 @@ def wait_cdp(state, timeout=15):
 
 def start(name, owner=None):
     valid(name)
+    # Record the requester before boot's fallback actor (systemd) can replace it.
+    # This records a request, not proof the service started or a claim of exclusivity.
+    claim_owner(name, owner)
     try:
         info = request(name, {'action': 'status'}, timeout=1)
     except (OSError, ValueError, RuntimeError):
         info = None
     if info is None:
-        subprocess.run(['systemctl', '--user', 'start', f'agent-bench@{name}.service'], check=True)
+        subprocess.run(['systemctl', '--user', 'start', bench_service(name)],
+                       env=systemd_env(), check=True)
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             try:
@@ -274,7 +601,6 @@ def start(name, owner=None):
                 time.sleep(.1)
         else:
             raise RuntimeError(f'Bancada não iniciou. Verifique journalctl --user -u agent-bench@{name}.service')
-    claim_owner(name, owner)
     touch_activity(name)
     return info
 
@@ -319,7 +645,10 @@ def gc_sessions(days=None, apply=False):
             kept.append({'name': name, 'reason': 'bancada ativa'})
             continue
         probe = subprocess.run(['systemctl', '--user', 'is-active', f'agent-bench@{name}.service'],
-                               capture_output=True, text=True)
+                               capture_output=True, text=True, env=systemd_env())
+        if probe.returncode not in (0, 3, 4):
+            kept.append({'name': name, 'reason': 'estado do serviço indisponível'})
+            continue
         if probe.stdout.strip() == 'active':
             kept.append({'name': name, 'reason': 'serviço ativo'})
             continue
@@ -338,6 +667,115 @@ def gc_sessions(days=None, apply=False):
     return {'removed': removed, 'kept': kept, 'apply': apply, 'days': days}
 
 
+def _bench_cgroup(pid, name):
+    """Resolve only the verified bench's cgroup-v2 subtree, never a neighbor."""
+    text = (PROC / str(pid) / 'cgroup').read_text()
+    lines = [line[3:] for line in text.splitlines() if line.startswith('0::')]
+    if len(lines) != 1 or not lines[0].startswith('/'):
+        raise ValueError('cgroup v2 ausente')
+    parts = Path(lines[0]).parts[1:]
+    service = bench_service(name)
+    if '..' in parts or service not in parts:
+        raise ValueError('processo fora da bancada')
+    return CGROUP.joinpath(*parts[:parts.index(service) + 1])
+
+
+def _cgroup_pids(root):
+    def unreadable(error):
+        raise error
+    pids = set()
+    for directory, _, files in os.walk(root, onerror=unreadable):
+        if 'cgroup.procs' not in files:
+            raise ValueError('inventário de processos incompleto')
+        for line in (Path(directory) / 'cgroup.procs').read_text().splitlines():
+            if not line.isdecimal() or int(line) <= 0:
+                raise ValueError('PID inválido no cgroup')
+            pids.add(int(line))
+    if not pids:
+        raise ValueError('cgroup vazio ou indisponível')
+    return pids
+
+
+def _native_process_record(pid, name, root):
+    proc = PROC / str(pid)
+    fields = (proc / 'stat').read_text().rsplit(')', 1)[1].split()
+    argv = [os.fsdecode(arg) for arg in (proc / 'cmdline').read_bytes().split(b'\0') if arg]
+    executable = os.readlink(proc / 'exe')
+    identity = (proc / 'exe').stat()
+    if (not argv or _bench_cgroup(pid, name) != root
+            or not executable.startswith('/') or executable.endswith(' (deleted)')
+            or not stat.S_ISREG(identity.st_mode)):
+        raise ValueError('identidade de processo incerta')
+    return {'argv': argv, 'parent': int(fields[1]), 'starttime': int(fields[19]),
+            'executable': Path(executable).name,
+            'exe_identity': (identity.st_dev, identity.st_ino)}
+
+
+def native_work_snapshot(name):
+    """Conservatively retain native work, including minimized or windowless jobs.
+
+    This inspects processes, not window titles or a claim about unsaved buffers.
+    Anything beyond the exact bench infrastructure/verified Chromium tree keeps
+    the session alive. Read failures and races are uncertainty, never emptiness.
+    """
+    try:
+        info = request(name, {'action': 'status'}, timeout=2)
+        server = int(info['server_pid'])
+        if info.get('name') != name:
+            raise ValueError('status de outra bancada')
+        root = _bench_cgroup(server, name)
+        pids = _cgroup_pids(root)
+        if server not in pids:
+            raise ValueError('Xvnc não pertence ao inventário')
+        records = {pid: _native_process_record(pid, name, root) for pid in pids}
+        if records[server]['executable'] != 'Xvnc':
+            raise ValueError('servidor não é Xvnc')
+
+        _, state = paths(name)
+        browser = profile_process(state / 'chromium')
+        if browser and browser.get('bench') != name:
+            raise ValueError('perfil de Chromium fora da bancada')
+        browser_pids = {browser['pid']} if browser else set()
+        if browser_pids and not browser_pids <= pids:
+            raise ValueError('Chromium mudou durante o inventário')
+        if browser and records[browser['pid']]['executable'] != 'chromium':
+            raise ValueError('executável do perfil não é Chromium')
+        # Children may appear before their parent in a cgroup.procs listing.
+        while True:
+            children = {pid for pid, row in records.items() if row['parent'] in browser_pids}
+            if children <= browser_pids:
+                break
+            browser_pids |= children
+
+        busy = []
+        for pid, row in records.items():
+            argv = row['argv']
+            command = row['executable']
+            central = (command.startswith('python') and argv[1:] ==
+                       [str(BASE / 'desktop/welcome.py'), name, str(state)])
+            controller = (command.startswith('python') and argv[1:] ==
+                          [str(BASE / 'bin/agent-bench'), '_serve', name])
+            bus_runner = (command == 'dbus-run-session' and argv[1:] ==
+                          ['--', str(BASE / 'bin/agent-bench'), '_serve', name])
+            bus = command == 'dbus-daemon' and '--session' in argv and '--nofork' in argv
+            wm = command == 'openbox' and argv[1:] == ['--config-file', str(BASE / 'desktop/openbox.xml')]
+            browser_process = (pid in browser_pids and
+                               row['exe_identity'] == records[browser['pid']]['exe_identity'])
+            if not (pid == server or browser_process or central or controller or bus_runner or bus or wm):
+                # Only executable names are returned; command arguments may
+                # contain document paths, private task content or credentials.
+                busy.append({'pid': pid, 'executable': command})
+        if _cgroup_pids(root) != pids:
+            raise ValueError('inventário mudou durante a leitura')
+        if any(_native_process_record(pid, name, root) != row for pid, row in records.items()):
+            raise ValueError('identidade mudou durante a leitura')
+        if busy:
+            return {'status': 'busy', 'reason': 'aplicativo ou processo nativo presente', 'processes': busy}
+        return {'status': 'idle', 'reason': 'somente infraestrutura reconhecida', 'processes': []}
+    except (OSError, RuntimeError, ValueError, KeyError, IndexError, TypeError):
+        return {'status': 'unknown', 'reason': 'inventário nativo não confirmado', 'processes': []}
+
+
 def should_reap(name, now=None):
     if name in NEVER_REAP:
         return False
@@ -352,13 +790,101 @@ def should_reap(name, now=None):
                 fcntl.flock(handle, fcntl.LOCK_UN)
             except BlockingIOError:
                 return False
-    if chromium_busy(name):
-        return False
     seen = last_activity(name)
     now = time.time() if now is None else now
-    if seen is None:
+    if seen is None or now - seen < IDLE_SECONDS:
         return False
-    return (now - seen) >= IDLE_SECONDS
+    # Leftover tabs and apps no longer pin a bench: only a connected CDP client
+    # or real CPU work counts as use once the agent stopped sending commands.
+    if cdp_client_connected(name):
+        return False
+    return not bench_cpu_busy(name)
+
+
+_cpu_samples = {}
+
+
+def _bench_cpu_seconds(name):
+    info = request(name, {'action': 'status'}, timeout=2)
+    root = _bench_cgroup(int(info['server_pid']), name)
+    for line in (root / 'cpu.stat').read_text().splitlines():
+        key, _, value = line.partition(' ')
+        if key == 'usage_usec':
+            return int(value) / 1e6
+    raise ValueError('cpu.stat sem usage_usec')
+
+
+def sample_cpu(name, now=None):
+    now = time.monotonic() if now is None else now
+    used = _bench_cpu_seconds(name)
+    samples = [s for s in _cpu_samples.get(name, []) if now - s[0] <= IDLE_CPU_WINDOW + 180]
+    samples.append((now, used))
+    _cpu_samples[name] = samples
+
+
+def bench_cpu_busy(name, now=None):
+    """Busy unless the reaper has watched a full window with little CPU use."""
+    now = time.monotonic() if now is None else now
+    samples = _cpu_samples.get(name) or []
+    old = [s for s in samples if now - s[0] >= IDLE_CPU_WINDOW]
+    if not old:
+        return True
+    return samples[-1][1] - old[-1][1] > IDLE_CPU_SECONDS
+
+
+def cdp_client_connected(name):
+    """A client holding a connection to the bench's CDP port is using the browser."""
+    _, state = paths(name)
+    try:
+        port = int((state / 'chromium/DevToolsActivePort').read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return False
+    for table in ('tcp', 'tcp6'):
+        try:
+            rows = (PROC / 'net' / table).read_text().splitlines()[1:]
+        except OSError:
+            continue
+        for row in rows:
+            fields = row.split()
+            try:
+                if int(fields[1].split(':')[1], 16) == port and fields[3] == '01':
+                    return True
+            except (IndexError, ValueError):
+                continue
+    return False
+
+
+def close_browser(name, timeout=10):
+    """Unit ExecStop: end Chromium before systemd kills Xvnc under it.
+
+    A SIGTERM lets Chromium flush cookies and exit cleanly; dying with its X
+    server lost recent cookies and marked every profile as crashed. Ephemeral
+    profiles are deleted afterwards.
+    """
+    _, state = paths(name)
+    profile = state / 'chromium'
+    try:
+        owner = profile_process(profile)
+    except RuntimeError:
+        owner = None
+    if owner and owner.get('bench') == name:
+        try:
+            os.kill(owner['pid'], signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                if (PROC / str(owner['pid']) / 'stat').read_text().rsplit(')', 1)[1].split()[0] == 'Z':
+                    break
+            except (OSError, IndexError):
+                break
+            time.sleep(.1)
+    removed = False
+    if (profile / EPHEMERAL_MARK).exists() and not _main_chromium_pids(profile):
+        shutil.rmtree(profile, ignore_errors=True)
+        removed = True
+    return {'closed': bool(owner), 'profile_removed': removed}
 
 
 def reap_idle():
@@ -366,10 +892,15 @@ def reap_idle():
     for sock in RUNTIME.glob('*/control.sock'):
         name = sock.parent.name
         try:
+            sample_cpu(name)
+        except (OSError, ValueError, RuntimeError, KeyError) as exc:
+            _cpu_samples.pop(name, None)
+            print('agent-bench reap cpu:', name, exc, flush=True)
+        try:
             if not should_reap(name):
                 continue
-            subprocess.run(['systemctl', '--user', 'stop', f'agent-bench@{name}.service'], check=False)
+            stop(name)
             stopped.append(name)
-        except (OSError, ValueError, RuntimeError) as exc:
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
             print('agent-bench reap:', name, exc, flush=True)
     return stopped

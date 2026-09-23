@@ -14,11 +14,13 @@ It is isolation of **display and input**, not a security sandbox. The agent stil
 | --- | --- |
 | `agent-bench` | CLI: `ensure`, `cdp`, `browser`, `exec`, `keep`, `gc`, … |
 | `agent-bench-mcp` | One stdio MCP for every harness: `bench_ensure`, `bench_cdp`, CUA with `bench=` |
+| `agent-bench-web` / `bench_web` | Browser accessibility snapshots, element refs, Unicode fill and tab ownership; CLI and MCP, no browser extension |
+| `agent-bench-profile` | Prepare a bench's initial persistent profile from the offline agent seed; dry-run by default |
 | Workspaces **6–11** | Persistent Hyprland workspaces for viewers. Never 12+ (that workspace is born on the focused monitor) |
 | Workspaces **1–5** | Human session. Read-only `hyprctl -j` is fine. No grim, ydotool, or computer-use there |
 | Skills | Drop-in Agent Skills: coexistence, bench operations, persistent-login recipe |
 
-An empty Xvnc is cheap (~80–140 MiB, ~0.3 s). The cost is Chromium. Benches start on demand. Idle ones with no real pages are reaped after 3 hours (`padrao` and human-control stay). Chromium profiles survive `stop`; `agent-bench keep NAME` writes `.keep` so disk GC leaves logins alone.
+An empty Xvnc is cheap (~80–140 MiB, ~0.3 s). The cost is Chromium. Benches start on demand. After 3 hours without commands, the reaper requires no work pages and only recognized infrastructure; native applications and uncertain state preserve the bench (`padrao` and human-control also stay). Chromium profiles survive `stop`; `agent-bench keep NAME` writes `.keep` so disk GC leaves logins alone. See [session retention](docs/session-retention.md).
 
 ```mermaid
 flowchart LR
@@ -61,7 +63,14 @@ agent-bench list
 
 Browser commands require an already prepared `desktop/sessions/demo/chromium/Default` for that bench. They validate the PID and cgroup before exposing CDP; they do not copy cookies, create an empty profile, or fall back to the human Chromium.
 
-Visit the bench with **Super+6** … **Super+9**, **Super+0** (workspace 10), or **Agent benches** in the launcher. Super+6 is view-only: the agent keeps working. **Super+Alt+A** (or **Take control**) lets you click and type. **Super+1** on that monitor gives the bench back. Clipboard stays separate in both modes.
+When the official agent seed is already prepared and offline, inspect
+`agent-bench-profile prepare demo`, then use `--apply` for the first copy.
+Existing destinations are preserved. See [profile preparation](docs/profile-provisioning.md)
+for the consistency checks and authentication limits.
+
+Open **Agent benches** in the launcher to show a viewer or take control. The package does not install workspace/`visit` key bindings: an ordinary workspace switch only shows the bench and leaves agent input active. To enter and take control, the **human** can run `agent-bench visit demo` (or `agent-bench visit 6` when that workspace has one bench). This focuses the viewer and requests mouse/keyboard control; agents must not use it to move the human's focus.
+
+On Mark, custom **Super+6** … **Super+9**, **Super+0** (workspace 10) and **Super+Ctrl+0** (11) already invoke `visit` and take control. Other installations depend on their own bindings; **Super+Alt+A** only takes control when configured. Leaving the bench workspace on all monitors gives control back automatically. Clipboard stays separate. See [coexistence](docs/coexistence.md).
 
 Point the harness at the multiplexed MCP (examples in [`contrib/mcp/`](contrib/mcp/)):
 
@@ -90,7 +99,11 @@ agent-bench keep login-app 'recurring login'
 agent-bench cdp login-app
 ```
 
-Forms: CDP / Playwright on the bench endpoint. Pixel CUA only when the page is opaque. Do not `hyprctl dispatch workspace` — that switches the workspace under the human pointer. Do not `stop` a bench mid-form. Close your own finished tabs.
+Forms: CDP / Playwright on the bench endpoint. For pixels and keys, prefer `bench_exec` or `agent-bench exec NAME -- xdotool ...` on the bench's exclusive DISPLAY. AT-SPI remains available for supported semantic controls. Pixel CUA requires a new client with proven driver startup protection; see [native isolation](docs/native-isolation.md). Do not `hyprctl dispatch workspace` — that switches the workspace under the human pointer. Do not `stop` a bench mid-form. Close your own finished tabs.
+
+For a shared semantic browser API across harnesses, see [browser control](docs/semantic-browser.md).
+The browser must already be prepared and running inside the bench. The CLI uses
+Python's `websocket-client`; it does not need Codex, Playwright or an extension.
 
 ## What this is not
 

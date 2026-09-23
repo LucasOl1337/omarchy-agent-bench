@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""MCP multiplexor: ensure, CDP and CUA on named agent benches."""
-import os
+"""CLI for the same semantic browser control exposed by agent-bench-mcp."""
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'desktop'))
-os.umask(0o077)
-from bench_hub_mcp import main
+from bench_web import main
+
 raise SystemExit(main())

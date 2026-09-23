@@ -24,7 +24,7 @@ agent-bench screenshot NAME /absolute/path.png
 
 Names: lowercase, digits, hyphen, max 40, unique per concurrent GUI task. Prefer MCP `agent-bench-mcp` (`bench_ensure`, `bench_cdp`, CUA with `bench=`). `agent-bench mcp NAME` is CUA for one name only. Do not attach harness computer-use to the human compositor.
 
-Forms: CDP/Playwright on `bench_cdp` / `agent-bench cdp NAME`. Pixel CUA only when the page is opaque. Stable names plus `agent-bench keep` so logins survive (skill `named-login-bench`). When finished, `agent-bench stop NAME` except `padrao`. `agent-bench gc` cleans expired sessions; `.keep` protects authenticated profiles.
+Forms: CDP/Playwright on `bench_cdp` / `agent-bench cdp NAME`. For pixels and keys, prefer `bench_exec` or `agent-bench exec NAME -- xdotool ...` on the bench's exclusive DISPLAY. AT-SPI remains available for supported semantic controls. Pixel CUA requires a new client with proven driver startup protection; see [native isolation](../../docs/native-isolation.md). Stable names plus `agent-bench keep` so logins survive (skill `named-login-bench`). When finished, `agent-bench stop NAME` except `padrao`. `agent-bench gc` cleans expired sessions; `.keep` protects authenticated profiles.
 
 If a route fails, recover another route **inside the same bench**. Direct control of the human session only when the human asked for that one intervention. Saving/restoring the clipboard is not isolation.
 

@@ -25,11 +25,17 @@ Do not:
 - start `chromium` inside the bench without `agent-bench browser` / `bench_browser` (it may attach to a process outside)
 - share one CDP client across two bench names
 
-## Pixel CUA
+## Native controls and pixels
 
-`agent-bench-mcp` injects a `bench` argument into CUA tools (`left_click`, `type`, `screenshot`, …). First call `bench_ensure`. The hub starts the nested display (~0.3 s if cold) and routes input through the same lock as the CLI.
+First call `bench_ensure`. For pixels and keys in canvas, native dialogs or other
+opaque controls, prefer `bench_exec` or `agent-bench exec NAME -- xdotool ...`
+on the bench's exclusive DISPLAY, without overriding it. Capture with
+`bench_screenshot` and verify the result after input.
 
-Use CUA when the page is a canvas, a game, or otherwise opaque to the accessibility/CDP tree. For HTML forms, CDP is faster and does not miss hit-targets.
+AT-SPI remains available for supported semantic controls, using observed
+PID/window and current element tokens. Pixel CUA requires a new client with
+proven driver startup protection; `bench=` and an opaque page alone are not
+proof. See [native isolation](native-isolation.md). Use bench CDP for HTML forms.
 
 `agent-bench mcp NAME` is a dedicated CUA server for a single name. The multiplexor is the default for Cursor, Claude, Codex, Hermes, Gemini, and OpenCode.
 

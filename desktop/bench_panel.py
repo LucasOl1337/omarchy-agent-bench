@@ -21,7 +21,7 @@ table.heading('#0', text='Bancada'); table.column('#0', width=310)
 table.heading('workspace', text='Workspace'); table.column('workspace', width=100, anchor='center')
 table.heading('mode', text='Controle'); table.column('mode', width=130, anchor='center')
 table.pack(fill='both', expand=True)
-status = tk.StringVar(value='Super+6 visita sem pausar o agente. Super+Alt+A assume a janela focada. Super+1 devolve sozinho.')
+status = tk.StringVar(value='Mostrar tela e Assumir controle são ações suas. Atalhos dependem da configuração; visit entra e assume. Ao sair da bancada em todos os monitores, o controle volta ao agente.')
 
 def refresh():
     try:

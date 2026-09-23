@@ -20,7 +20,7 @@ sys.path.insert(0, str(BASE / 'desktop'))
 from bench_control import control, views
 from bench_ops import (RUNTIME, STATE, cdp_snapshot, claim_owner, ensure,
                        gc_sessions, keep_session, load_owner, open_browser, paths, request, start,
-                       touch_activity, valid, wait_cdp, bench_browser_snapshot)
+                       touch_activity, valid, wait_cdp, bench_browser_snapshot, stop, close_browser)
 DROP = ('DISPLAY', 'WAYLAND_DISPLAY', 'WAYLAND_SOCKET', 'XAUTHORITY',
         'HYPRLAND_INSTANCE_SIGNATURE', 'DBUS_SESSION_BUS_ADDRESS',
         'DBUS_STARTER_ADDRESS', 'DBUS_STARTER_BUS_TYPE', 'AT_SPI_BUS_ADDRESS',
@@ -45,7 +45,9 @@ def boot(name):
                XDG_CACHE_HOME=str(state / 'cache'), XDG_DATA_HOME=str(state / 'data'),
                XDG_STATE_HOME=str(state / 'state'), XDG_SESSION_TYPE='x11',
                XDG_CURRENT_DESKTOP='Openbox', GDK_BACKEND='x11', QT_QPA_PLATFORM='xcb',
-               GTK_USE_PORTAL='0', LIBGL_ALWAYS_SOFTWARE='1')
+               GTK_USE_PORTAL='0', LIBGL_ALWAYS_SOFTWARE='1',
+               # The private session bus has no systemd manager for broker activation.
+               ATSPI_DBUS_IMPLEMENTATION='dbus-daemon')
     os.execve('/usr/bin/dbus-run-session', ['dbus-run-session', '--', str(Path(__file__).resolve()), '_serve', name], env)
 
 def cgroup_tasks():
@@ -224,7 +226,7 @@ def main():
     parser.add_argument('action', choices=['start', 'stop', 'status', 'list', 'exec', 'launch',
                         'browser', 'home', 'terminal', 'tools', 'doctor', 'screenshot', 'clipboard', 'view', 'mcp',
                         'collaborate', 'resume', 'dock', 'ensure', 'cdp', 'browser-status', 'gc', 'keep', 'visit', 'close-here',
-                        '_boot', '_serve'])
+                        '_boot', '_serve', '_close-browser'])
     parser.add_argument('name', nargs='?', default=None)
     parser.add_argument('args', nargs=argparse.REMAINDER)
     a = parser.parse_args()
@@ -257,9 +259,11 @@ def main():
         from toolkit import catalog
         print(json.dumps(catalog(), ensure_ascii=False, indent=2)); return 0
     if a.action == '_boot': return boot(name)
+    if a.action == '_close-browser':
+        print(json.dumps(close_browser(name))); return 0
     if a.action == '_serve': return serve(name)
     if a.action == 'stop':
-        return subprocess.run(['systemctl', '--user', 'stop', f'agent-bench@{name}.service']).returncode
+        return stop(name).returncode
     if a.action == 'list':
         found = []
         for p in sorted(RUNTIME.glob('*/control.sock')):

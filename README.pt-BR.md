@@ -18,7 +18,7 @@ Agentes de código no desktop pessoal pegam o mouse, abrem aba no Chromium human
 | Workspaces **1–5** | Sessão humana. `hyprctl -j` só leitura. Sem grim, ydotool ou computer-use aí |
 | Skills | Agent Skills: convivência, operação da bancada, receita de login persistente |
 
-Um Xvnc vazio é barato (~80–140 MiB, ~0,3 s). O custo é o Chromium. Bancadas sobem sob demanda. Ociosas sem páginas reais são encerradas após 3 h (`padrao` e controle humano ficam). O perfil sobrevive ao `stop`; `agent-bench keep NOME` grava `.keep` para o GC de disco não apagar o login.
+Um Xvnc vazio é barato (~80–140 MiB, ~0,3 s). O custo é o Chromium. Bancadas sobem sob demanda. Após 3 h sem comandos (padrão), o encerramento automático exige ausência de páginas de trabalho e apenas infraestrutura reconhecida; aplicativos nativos e estado incerto preservam a bancada (`padrao` e controle humano também ficam). O perfil sobrevive ao `stop`; `agent-bench keep NOME` grava `.keep` para o GC de disco não apagar o login. Veja [retenção de sessões](docs/session-retention.md).
 
 ## Uso
 
@@ -41,9 +41,13 @@ agent-bench browser demo https://example.com
 
 Os comandos de navegador exigem que `desktop/sessions/demo/chromium/Default` já tenha sido preparado para essa bancada. Eles validam o PID e o cgroup antes de expor CDP; não copiam cookies, não criam perfil vazio e não usam o Chromium humano como fallback.
 
-Acompanhe com **Super+6** … **Super+9**, **Super+0** (workspace 10) ou o painel **Bancada dos agentes**. Super+6 só visita (o agente continua). **Super+Alt+A** / **Assumir controle** para clicar e digitar; **Super+1** no mesmo monitor devolve sozinho. O clipboard permanece separado.
+Abra **Bancada dos agentes** no launcher para mostrar a tela ou assumir o controle. O pacote não instala atalhos de workspace/`visit`: uma troca comum de workspace só mostra a bancada e mantém a entrada do agente ativa. Para entrar e assumir, o **humano** pode executar `agent-bench visit demo` (ou `agent-bench visit 6` quando houver uma bancada nesse workspace). O comando foca a viewer e solicita mouse/teclado; agentes não devem usá-lo para mover o foco humano.
 
-Ligue o harness no MCP multiplexado (`contrib/mcp/`). Formulários: CDP/Playwright no endpoint da bancada. CUA de pixels só quando a página for opaca. Não use `hyprctl dispatch workspace`. Não dê `stop` no meio de um formulário.
+Em Mark, os atalhos personalizados **Super+6** … **Super+9**, **Super+0** (workspace 10) e **Super+Ctrl+0** (11) já chamam `visit` e assumem o controle. Outras instalações dependem dos seus próprios binds; **Super+Alt+A** só assume quando configurado. Ao deixar o workspace da bancada em todos os monitores, o controle é devolvido automaticamente. O clipboard permanece separado. Veja [convivência](docs/coexistence.md).
+
+Ligue o harness no MCP multiplexado (`contrib/mcp/`). Formulários: CDP/Playwright no endpoint da bancada. Para pixels e teclas, prefira `bench_exec` ou `agent-bench exec NOME -- xdotool ...` no DISPLAY exclusivo da bancada. AT-SPI continua disponível para controles semânticos compatíveis. CUA pixels exige cliente novo com proteção de inicialização do driver comprovada; veja [isolamento nativo](docs/native-isolation.md). Não use `hyprctl dispatch workspace`. Não dê `stop` no meio de um formulário.
+
+Para controlar o navegador por referências de elementos e leitura semântica, use `bench_web` no MCP ou a CLI `agent-bench-web`; veja [controle de navegador](docs/semantic-browser.md).
 
 Copie `skills/` para o hub que o seu harness já carrega. Três skills: `human-agent-coexistence`, `agent-bench`, `named-login-bench`.
 
