@@ -176,13 +176,32 @@ class Reaper(unittest.TestCase):
             cpu.assert_not_called()
 
     def test_cpu_needs_a_full_quiet_window(self):
+        hz = os.sysconf('SC_CLK_TCK')
         with patch.dict(ops._cpu_samples, clear=True):
-            ops._cpu_samples['job'] = [(0, 100.0), (ops.IDLE_CPU_WINDOW - 60, 101.0)]
+            ops._cpu_samples['job'] = [(0, {7: 100 * hz}), (ops.IDLE_CPU_WINDOW - 60, {7: 101 * hz})]
             self.assertTrue(ops.bench_cpu_busy('job', now=ops.IDLE_CPU_WINDOW - 60))
-            ops._cpu_samples['job'].append((ops.IDLE_CPU_WINDOW + 5, 105.0))
+            ops._cpu_samples['job'].append((ops.IDLE_CPU_WINDOW + 5, {7: 105 * hz}))
             self.assertFalse(ops.bench_cpu_busy('job', now=ops.IDLE_CPU_WINDOW + 5))
-            ops._cpu_samples['job'].append((ops.IDLE_CPU_WINDOW + 65, 140.0))
+            # a new process that burned 40 s counts in full; an exited one drops out
+            ops._cpu_samples['job'].append((ops.IDLE_CPU_WINDOW + 65, {9: 40 * hz}))
             self.assertTrue(ops.bench_cpu_busy('job', now=ops.IDLE_CPU_WINDOW + 65))
+
+    def test_browser_and_infra_cpu_is_not_work(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            for pid, comm, argv in ((1, 'Xvnc', b'Xvnc :80'), (2, 'chromium', b'/usr/lib/chromium/chromium --type=renderer'),
+                                    (3, 'python3', b'python3 /x/bin/agent-bench _serve b'), (4, 'WowB.exe', b'WowB.exe'),
+                                    (5, 'fusermount3', b'fusermount3 -o fsname=portal'),
+                                    (6, 'electron', b'/x/electron /y/main.cjs')):
+                (root / str(pid)).mkdir()
+                (root / str(pid) / 'comm').write_text(comm + '\n')
+                (root / str(pid) / 'cmdline').write_bytes(argv.replace(b' ', b'\0') + b'\0')
+                (root / str(pid) / 'stat').write_text(f'{pid} ({comm}) S 1 0 0 0 0 0 0 0 0 0 {pid * 100} 5 0')
+            with patch.object(ops, 'PROC', root), \
+                 patch.object(ops, 'request', return_value={'server_pid': 1}), \
+                 patch.object(ops, '_bench_cgroup', return_value=root), \
+                 patch.object(ops, '_cgroup_pids', return_value={1, 2, 3, 4, 5, 6}):
+                self.assertEqual(ops._native_cpu_ticks('b'), {4: 405})
 
     def test_keep_marker_remains_disk_retention_only(self):
         with tempfile.TemporaryDirectory() as folder:

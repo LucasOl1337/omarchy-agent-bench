@@ -802,34 +802,55 @@ def should_reap(name, now=None):
 
 
 _cpu_samples = {}
+# The bench itself and its browser; everything else in the cgroup is native work.
+# Names are /proc/PID/comm (15 chars), readable even for the setuid fusermount3
+# whose unreadable exe made the old inventory "unknown" on every bench.
+BENCH_INFRA = frozenset({'Xvnc', 'openbox', 'dbus-daemon', 'dbus-run-sessio', 'fusermount3',
+                         'gvfsd', 'gvfsd-fuse', 'at-spi-bus-laun', 'at-spi2-registr',
+                         'xdg-desktop-por', 'xdg-document-po', 'xdg-permission-',
+                         'chromium', 'chrome', 'chrome_crashpad',
+                         # Electron apps are Chromium too: an idle UI left open
+                         # burned up to 30% CPU (DailyWork review benches, 23/09).
+                         'electron'})
 
 
-def _bench_cpu_seconds(name):
+def _native_cpu_ticks(name):
+    """CPU ticks per native process: leftover browser tabs burning CPU are not work."""
     info = request(name, {'action': 'status'}, timeout=2)
     root = _bench_cgroup(int(info['server_pid']), name)
-    for line in (root / 'cpu.stat').read_text().splitlines():
-        key, _, value = line.partition(' ')
-        if key == 'usage_usec':
-            return int(value) / 1e6
-    raise ValueError('cpu.stat sem usage_usec')
+    ticks = {}
+    for pid in _cgroup_pids(root):
+        proc = PROC / str(pid)
+        try:
+            comm = (proc / 'comm').read_text().strip()
+            command = b' '.join(_process_args(proc))
+            fields = (proc / 'stat').read_text().rsplit(')', 1)[1].split()
+        except (OSError, IndexError):
+            continue
+        if comm in BENCH_INFRA or b'bin/agent-bench' in command or b'desktop/welcome.py' in command:
+            continue
+        ticks[pid] = int(fields[11]) + int(fields[12])
+    return ticks
 
 
 def sample_cpu(name, now=None):
     now = time.monotonic() if now is None else now
-    used = _bench_cpu_seconds(name)
+    ticks = _native_cpu_ticks(name)
     samples = [s for s in _cpu_samples.get(name, []) if now - s[0] <= IDLE_CPU_WINDOW + 180]
-    samples.append((now, used))
+    samples.append((now, ticks))
     _cpu_samples[name] = samples
 
 
 def bench_cpu_busy(name, now=None):
-    """Busy unless the reaper has watched a full window with little CPU use."""
+    """Busy unless the reaper watched a full window of little native CPU use."""
     now = time.monotonic() if now is None else now
     samples = _cpu_samples.get(name) or []
     old = [s for s in samples if now - s[0] >= IDLE_CPU_WINDOW]
     if not old:
         return True
-    return samples[-1][1] - old[-1][1] > IDLE_CPU_SECONDS
+    before, after = old[-1][1], samples[-1][1]
+    used = sum(max(0, ticks - before.get(pid, 0)) for pid, ticks in after.items())
+    return used / os.sysconf('SC_CLK_TCK') > IDLE_CPU_SECONDS
 
 
 def cdp_client_connected(name):
