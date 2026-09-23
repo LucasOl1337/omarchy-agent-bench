@@ -71,7 +71,7 @@ No hub multiplexado, `tools/list` lê o catálogo estático filtrado sem `ensure
 nem criação de desktop/driver. Isso não confirma que uma bancada esteja pronta.
 Uma conexão nova pode selecionar nomes: `agent-bench-mcp --tools bench_list`
 ou `--tools bench_list bench_ensure bench_browser bench_web bench_cdp`.
-Sem a opção, mantém o catálogo completo. Seleção só de ferramentas do hub
+Sem a opção, publica o núcleo usado pelos agentes (20 ferramentas, `CORE_TOOLS`); `--tools all` mantém o catálogo completo. Seleção só de ferramentas do hub
 dispensa dump/CUA na descoberta; chamadas fora da lista são recusadas antes do
 despacho. `bench_doctor` chama `ensure` e não é leitura pura. Consulte
 `docs/tool-discovery.md` no repositório fonte para o contrato completo.
