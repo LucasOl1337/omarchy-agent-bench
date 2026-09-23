@@ -2,7 +2,7 @@
 import shutil
 from pathlib import Path
 
-from bench_ops import cdp_snapshot
+from bench_ops import bench_browser_snapshot
 
 BASE = Path(__file__).resolve().parent
 
@@ -20,7 +20,7 @@ def catalog():
 def inspect(name, info, view):
     display = info.get('display', '')
     number = display.lstrip(':').split('.')[0]
-    browser = cdp_snapshot(info['state'])
+    browser = bench_browser_snapshot(name)
     workspace = view.get('workspace')
     return {'name': name, 'display': display, 'display_socket': Path('/tmp/.X11-unix/X' + number).exists(),
             'workspace': workspace, 'workspace_reserved': workspace in range(6, 12),

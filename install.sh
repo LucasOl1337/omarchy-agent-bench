@@ -36,33 +36,92 @@ done
 
 python3 - "$root" "$prefix" "$install_skills" "$reload_hypr" <<'PY'
 from pathlib import Path
+import os
+import re
 import shutil
 import sys
 import time
 
 root, prefix, install_skills, reload_hypr = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3] == '1', sys.argv[4] == '1'
 home = Path.home()
+prefix = prefix.expanduser().absolute()
+if any(path.is_symlink() for path in (prefix, *prefix.parents)) or (prefix / 'desktop').is_symlink():
+    raise SystemExit('Refusing a symlinked install root or desktop. Keep runtime state in place.')
+prefix = prefix.resolve()
 
 if prefix.resolve() == root.resolve():
     raise SystemExit('Refusing to install into the source tree. Pick another --prefix.')
 
 prefix.mkdir(parents=True, exist_ok=True)
+persistent = ('sessions', 'browser-seed')
+
+def copy_code(src, dst):
+    copied = shutil.copy2(src, dst)
+    path = Path(copied)
+    data = path.read_bytes()
+    if b'@PREFIX@' in data:
+        path.write_bytes(data.replace(b'@PREFIX@', str(prefix).encode()))
+    return copied
+
+def copy_skill(src, dst):
+    copied = shutil.copy2(src, dst)
+    path = Path(copied)
+    if path.suffix == '.md':
+        # Only hub copies move away from the skills/ + docs/ source layout.
+        def doc_link(match):
+            target = (Path(src).parent / match[1]).resolve()
+            if not target.is_relative_to(prefix / 'docs'):
+                return match[0]
+            relative = os.path.relpath(target, path.parent.resolve())
+            return f'](<{relative}{match[2] or ""}>)'
+        body = path.read_text(encoding='utf-8')
+        relocated = re.sub(r'\]\((\.\./\.\./docs/[^()\s<>#]+\.md)(#[^()\s<>]*)?\)', doc_link, body)
+        if relocated != body:
+            path.write_text(relocated, encoding='utf-8')
+    return copied
+
 for name in ('bin', 'desktop', 'contrib', 'skills', 'docs'):
     src, dst = root / name, prefix / name
-    if dst.exists():
-        shutil.rmtree(dst)
-    shutil.copytree(src, dst, ignore=shutil.ignore_patterns('__pycache__', '*.pyc', 'sessions'))
-
-for path in prefix.rglob('*'):
-    if not path.is_file():
+    if name == 'desktop' and dst.is_dir():
+        # Persistent entries may be profiles, links or uncertain state. Do not
+        # open, traverse, replace or remove them during a code installation.
+        for child in dst.iterdir():
+            if child.name in persistent:
+                continue
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+    elif dst.is_dir():
+        # With prefix ~/.agents these directories are shared with other tools:
+        # skills/ is the machine's skill hub and bin/ holds agent-hub. Replacing
+        # them whole wiped both on 23/09/2026. Touch only this project's entries
+        # and leave links owned by other sources alone.
+        for child in src.iterdir():
+            if child.name == '__pycache__' or child.suffix == '.pyc':
+                continue
+            target = dst / child.name
+            if target.is_symlink():
+                print(f'{name}: {target} is a link owned by another source; kept')
+                continue
+            if target.is_dir():
+                shutil.rmtree(target)
+            elif target.exists():
+                target.unlink()
+            if child.is_dir():
+                shutil.copytree(child, target, copy_function=copy_code,
+                                ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+            else:
+                copy_code(child, target)
         continue
-    text = path.read_text(encoding='utf-8', errors='ignore')
-    if '@PREFIX@' in text:
-        path.write_text(text.replace('@PREFIX@', str(prefix)))
+    elif dst.exists():
+        shutil.rmtree(dst)
+    shutil.copytree(src, dst, dirs_exist_ok=True, copy_function=copy_code,
+                    ignore=shutil.ignore_patterns('__pycache__', '*.pyc', *persistent))
 
 bindir = home / '.local/bin'
 bindir.mkdir(parents=True, exist_ok=True)
-for name in ('agent-bench', 'agent-bench-mcp'):
+for name in ('agent-bench', 'agent-bench-mcp', 'agent-bench-web', 'agent-bench-profile', 'agent-bench-native'):
     target = bindir / name
     if target.is_symlink() or target.exists():
         target.unlink()
@@ -103,7 +162,7 @@ if install_skills:
             if dst.exists() or dst.is_symlink():
                 backup = hub / f'{name}.bak.{time.time_ns()}'
                 dst.rename(backup)
-            shutil.copytree(src, dst)
+            shutil.copytree(src, dst, copy_function=copy_skill)
     else:
         print('No ~/.agents/skills — skills stay in', prefix / 'skills')
 
@@ -116,16 +175,15 @@ if command -v update-desktop-database >/dev/null; then
   update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
 fi
 
-systemctl --user daemon-reload
-
 if [[ "$enable_services" -eq 1 ]]; then
+  systemctl --user daemon-reload
   systemctl --user enable --now agent-bench-views.service
   systemctl --user enable agent-bench@padrao.service
   echo "Enabled agent-bench-views.service and agent-bench@padrao.service (login)."
   echo "Existing benches were not restarted."
 fi
 
-if [[ "$reload_hypr" -eq 1 ]] && command -v hyprctl >/dev/null && test -n "${HYPRLAND_INSTANCE_SIGNATURE:-}"; then
+if [[ "$enable_services" -eq 1 && "$reload_hypr" -eq 1 ]] && command -v hyprctl >/dev/null && test -n "${HYPRLAND_INSTANCE_SIGNATURE:-}"; then
   hyprctl reload
   errors="$(hyprctl configerrors || true)"
   if test -n "$errors"; then
@@ -137,8 +195,9 @@ fi
 echo
 echo 'Next:'
 echo '  agent-bench ensure demo'
-echo '  agent-bench cdp demo'
-echo '  Super+6 … Super+0 to visit workspaces 6–10 (workspace 11 from the panel)'
+echo '  agent-bench doctor demo'
+echo '  Browser profiles need an offline agent seed: docs/profile-provisioning.md'
+echo '  Human takeover: agent-bench visit demo (workspace shortcuts depend on local bindings)'
 echo
 echo 'Point Cursor / Claude / Codex at agent-bench-mcp. Examples in contrib/mcp/'
 echo 'Docs: docs/install.md'

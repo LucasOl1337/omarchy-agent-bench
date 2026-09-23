@@ -20,7 +20,7 @@ skills/named-login-bench/scripts/prepare login-app
 The script `ensure`s, writes `.keep`, prints CDP. It never `stop`s. If `control` is `humano`, it fails: wait for the operator to give the bench back.
 
 3. Confirm the account in **that** window.
-4. Forms: Playwright `connectOverCDP` on the printed endpoint. CUA only with `bench=NAME` and only if the page is opaque.
+4. Forms: Playwright `connectOverCDP` on the printed endpoint. For pixels and keys, prefer `bench_exec` or `agent-bench exec NAME -- xdotool ...` on the bench's exclusive DISPLAY. AT-SPI remains available for supported semantic controls. Pixel CUA requires a new client with proven driver startup protection; see [native isolation](../../docs/native-isolation.md).
 
 ## Never
 

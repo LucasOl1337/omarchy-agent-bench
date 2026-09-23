@@ -6,5 +6,5 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'desktop'))
 os.umask(0o077)
-from bench_hub_mcp import run
-raise SystemExit(run())
+from bench_hub_mcp import main
+raise SystemExit(main())

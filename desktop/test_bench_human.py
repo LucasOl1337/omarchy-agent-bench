@@ -57,6 +57,19 @@ class VisitAndClose(unittest.TestCase):
         chromium = {'class': 'chromium', 'title': 'YouTube', 'workspace': {'id': 2}}
         self.assertEqual(h.close_decision(chromium, 2, self.entries, [chromium]), ('close', None))
 
+    def test_visit_shared_workspace_lands_without_picking(self):
+        entries = {**self.entries, 'outra': {'workspace': 7, 'viewer_pid': 3}}
+        self.assertEqual(h.resolve_visit('7', entries), (7, None))
+        with patch.object(h, 'load_entries', return_value=entries), \
+             patch.object(h, 'focus_workspace') as focus, \
+             patch.object(h, 'notify') as notify, \
+             patch.object(h, 'views') as views:
+            result = h.visit('7')
+        focus.assert_called_once_with(7)
+        views.assert_not_called()
+        self.assertEqual(result['benches'], ['login-app', 'outra'])
+        self.assertIn('login-app', notify.call_args.args[0])
+
     def test_viewer_name_ignores_other_windows(self):
         self.assertIsNone(h.viewer_name({'class': 'chromium', 'title': 'Bancada dos agentes — padrao - TigerVNC'}))
         self.assertEqual(h.viewer_name(self.viewer), 'login-app')

@@ -75,6 +75,18 @@ def focus_address(address):
     hypr('eval', f'local w=hl.get_window({addr}); if w then hl.dispatch(hl.dsp.focus({{window=w}})) end')
 
 
+def bench_label(name):
+    try:
+        owner = json.loads((RUNTIME / name / 'owner.json').read_text()).get('owner')
+    except (OSError, ValueError):
+        owner = None
+    return f'{name} ({owner})' if owner and owner != 'unknown' else name
+
+
+def notify(text):
+    subprocess.run(['notify-send', '-a', 'Bancada', 'Bancada', text], check=False, timeout=5)
+
+
 def resolve_visit(target, entries, window=None, workspace=None):
     target = str(target)
     name = None
@@ -84,18 +96,14 @@ def resolve_visit(target, entries, window=None, workspace=None):
         name = viewer_name(window)
         if not name:
             matches = benches_on(workspace, entries)
-            if len(matches) > 1:
-                raise RuntimeError('Várias bancadas neste workspace. Clique na janela da que você quer.')
-            name = matches[0] if matches else None
+            name = matches[0] if len(matches) == 1 else None
         if name and name in entries:
             workspace = entries[name].get('workspace', workspace)
         return workspace, name
     if target.isdigit() and int(target) in AGENT_WORKSPACES:
         workspace = int(target)
         matches = benches_on(workspace, entries)
-        if len(matches) > 1:
-            raise RuntimeError('Várias bancadas neste workspace. Clique na janela da que você quer.')
-        return workspace, matches[0] if matches else None
+        return workspace, matches[0] if len(matches) == 1 else None
     if target not in entries:
         raise RuntimeError('Sem bancada ' + target + ' neste momento.')
     return entries[target]['workspace'], target
@@ -110,6 +118,14 @@ def visit(target):
         focus_workspace(entries[name]['workspace'])
     else:
         return {'workspace': workspace, 'visited': False}
+    shared = benches_on(workspace, entries) if not name else []
+    if len(shared) > 1:
+        # Two benches share this workspace: land on it and let the human pick,
+        # instead of failing before the workspace switch.
+        labels = ', '.join(bench_label(n) for n in shared)
+        notify(f'Workspace {workspace} tem {len(shared)} bancadas: {labels}. '
+               'Clique na que quer e use Super+Alt+A para assumir.')
+        return {'workspace': workspace, 'visited': True, 'benches': shared}
     if name:
         for client in clients():
             if viewer_name(client) == name:
