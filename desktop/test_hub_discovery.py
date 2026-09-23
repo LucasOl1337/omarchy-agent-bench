@@ -239,9 +239,20 @@ class HubToolSelectionTests(unittest.TestCase):
                              [invocation.args[1] for invocation in call.call_args_list])
         self.assertEqual(before, messages)
 
+    def test_default_core_drops_tools_missing_without_cua_driver(self):
+        with patch.object(hub_module, 'load_cua_tools', return_value=self.CATALOG), \
+             patch.object(hub_module, 'CuaPool'):
+            hub = hub_module.Hub(list(hub_module.CORE_TOOLS), optional=True)
+            names = [tool['name'] for tool in hub.tools()]
+        self.assertIn('bench_web', names)
+        self.assertLessEqual(set(names), set(hub_module.CORE_TOOLS))
+
     def test_cli_parses_names_and_keeps_default_and_invalid_configuration_explicit(self):
         with patch.object(hub_module, 'run') as run:
             hub_module.main([])
+            run.assert_called_once_with(list(hub_module.CORE_TOOLS), optional=True)
+            run.reset_mock()
+            hub_module.main(['--tools', 'all'])
             run.assert_called_once_with(None)
             run.reset_mock()
             hub_module.main(['--tools', 'bench_list', 'bench_web'])

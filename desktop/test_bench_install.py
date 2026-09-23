@@ -320,14 +320,19 @@ print(json.dumps({'tools':[{'name':'click','description':'fixture native tool','
                                   env=self.env,cwd=self.root,capture_output=True,text=True,timeout=5)
         self.assertEqual(0, imported.returncode, imported.stderr)
 
-    def test_installed_hub_without_cua_returns_explicit_catalog_error(self):
+    def test_installed_hub_without_cua_keeps_bench_tools_and_all_is_explicit(self):
         result = self.install()
         self.assertEqual(0, result.returncode, result.stderr)
         (self.commands/'cua-driver').unlink()
-        result = self.command('agent-bench-mcp', input=json.dumps({'jsonrpc':'2.0','id':1,'method':'tools/list'})+'\n')
+        listar = json.dumps({'jsonrpc':'2.0','id':1,'method':'tools/list'})+'\n'
+        result = self.command('agent-bench-mcp', input=listar)
         self.assertEqual(0, result.returncode, result.stderr)
-        reply = json.loads(result.stdout)
-        self.assertIn('catalog_unavailable', reply['error']['message'])
+        names = [tool['name'] for tool in json.loads(result.stdout)['result']['tools']]
+        self.assertIn('bench_web', names)
+        self.assertFalse(any(not name.startswith('bench_') for name in names))
+        result = self.command('agent-bench-mcp', '--tools', 'all', input=listar)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn('catalog_unavailable', json.loads(result.stdout)['error']['message'])
         self.assertFalse(any(call[0] in ('systemd-run','Xvnc','chromium') for call in self.calls()))
 
 

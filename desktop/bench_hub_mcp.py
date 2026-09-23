@@ -359,30 +359,49 @@ class ToolSelectionError(ValueError):
     pass
 
 
+# Default catalog, measured on 23/09/2026: of 59 tools (~20k tokens of schema
+# in every session of harnesses that load MCP eagerly), agents used about 20,
+# with bench_web alone at 40% of calls. `--tools all` exposes the full set.
+CORE_TOOLS = ('bench_ensure', 'bench_list', 'bench_stop', 'bench_cdp', 'bench_browser', 'bench_web',
+              'bench_exec', 'bench_launch', 'bench_screenshot', 'bench_clipboard_get', 'bench_clipboard_set',
+              'get_desktop_state', 'get_window_state', 'list_windows',
+              'click', 'type_text', 'press_key', 'hotkey', 'scroll', 'drag')
+
+
 class Hub:
-    def __init__(self, tools=None):
+    def __init__(self, tools=None, optional=False):
         self.cua_names = set()
         self.allowed_tools = None
+        # optional: names missing from the catalog (no cua-driver) are dropped, not an error.
+        self.optional = optional
         if tools is not None:
             if (not isinstance(tools, (list, tuple)) or not tools
                     or any(not isinstance(name, str) or not name.strip() for name in tools)):
                 raise ToolSelectionError('TOOLS_CONFIG_INVALID: --tools exige uma lista não vazia de nomes.')
             self.allowed_tools = frozenset(tools)
-            try:
-                self.tools()  # Validate configuration before any pool/bench use.
-            except CatalogError as exc:
-                raise ToolSelectionError(f'TOOLS_CONFIG_INVALID: {exc}') from exc
+            if not optional:
+                try:
+                    self.tools()  # Validate configuration before any pool/bench use.
+                except CatalogError as exc:
+                    raise ToolSelectionError(f'TOOLS_CONFIG_INVALID: {exc}') from exc
         self.cua = CuaPool()
 
     def tools(self):
         hub_names = {tool['name'] for tool in HUB_TOOLS}
         hub_only = self.allowed_tools is not None and self.allowed_tools <= hub_names
-        native = [] if hub_only else available_tools(load_cua_tools())
+        native = []
+        if not hub_only:
+            try:
+                native = available_tools(load_cua_tools())
+            except CatalogError:
+                # The default core still serves the bench tools without cua-driver.
+                if not self.optional:
+                    raise
         tools = [inject_bench_schema(tool) for tool in native]
         catalog = [*HUB_TOOLS, *tools]
         if self.allowed_tools is not None:
             missing = self.allowed_tools - {tool['name'] for tool in catalog}
-            if missing:
+            if missing and not self.optional:
                 raise CatalogError('catalog_selection_invalid',
                                    'ferramentas desconhecidas ou indisponíveis: ' + ', '.join(sorted(missing)))
             catalog = [tool for tool in catalog if tool['name'] in self.allowed_tools]
@@ -443,8 +462,8 @@ class Hub:
         return None
 
 
-def run(tools=None):
-    hub = Hub(tools)
+def run(tools=None, optional=False):
+    hub = Hub(tools, optional)
     def terminate(*_):
         hub.cua.close()
         raise SystemExit(0)
@@ -471,9 +490,14 @@ def run(tools=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(description='MCP das bancadas agent-bench.')
     parser.add_argument('--tools', nargs='+', metavar='NAME',
-                        help='Lista explícita de ferramentas; omitida, mantém o catálogo completo.')
+                        help='Lista explícita de ferramentas, ou "all" para o catálogo completo; '
+                             'omitida, publica o núcleo usado pelos agentes (CORE_TOOLS).')
     args = parser.parse_args(argv)
     try:
+        if args.tools is None:
+            return run(list(CORE_TOOLS), optional=True)
+        if args.tools == ['all']:
+            return run(None)
         return run(args.tools)
     except ToolSelectionError as exc:
         parser.error(str(exc))
