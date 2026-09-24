@@ -10,6 +10,7 @@ import secrets
 import signal
 import socket
 import socketserver
+import struct
 import subprocess
 import sys
 import threading
@@ -19,7 +20,7 @@ BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE / 'desktop'))
 from bench_control import control, views
 from bench_ops import (RUNTIME, STATE, cdp_snapshot, claim_owner, ensure,
-                       gc_sessions, keep_session, load_owner, open_browser, paths, request, start,
+                       gc_sessions, keep_session, load_owner, open_browser, paths, record_origin, request, start,
                        touch_activity, valid, wait_cdp, bench_browser_snapshot, stop, close_browser)
 DROP = ('DISPLAY', 'WAYLAND_DISPLAY', 'WAYLAND_SOCKET', 'XAUTHORITY',
         'HYPRLAND_INSTANCE_SIGNATURE', 'DBUS_SESSION_BUS_ADDRESS',
@@ -126,6 +127,13 @@ def serve(name):
                 if xvnc.poll() is not None: raise RuntimeError('Display indisponível; sem fallback para o host')
                 if action != 'status':
                     touch_activity(name)
+                if action not in ('status', 'human-input'):
+                    # The human sees which agent, project and launcher drive this bench.
+                    try:
+                        peer = self.request.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize('3i'))
+                        record_origin(name, struct.unpack('3i', peer)[0], action)
+                    except (OSError, ValueError, struct.error):
+                        pass
                 if action == 'status':
                     result = {**info, 'control_mode': 'humano' if (runtime / 'human-control').exists() else 'agente',
                               'owner': load_owner(name).get('owner'), 'human_input': dict(human_input),

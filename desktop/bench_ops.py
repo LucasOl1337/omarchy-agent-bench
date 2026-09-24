@@ -188,6 +188,108 @@ def owner_from_ancestors(pid=None):
     return None
 
 
+# Programs that start or host a harness. Named so the human sees where a bench's
+# driver came from: a Maestri canvas, a herdr pane, the DailyWork app, Hermes.
+LAUNCHERS = (('maestri-app', 'maestri'), ('maestri', 'maestri'), ('herdr', 'herdr'), ('hermes', 'hermes'),
+             ('tmux', 'tmux'), ('zellij', 'zellij'), ('sshd', 'ssh'), ('ghostty', 'terminal'),
+             ('alacritty', 'terminal'), ('kitty', 'terminal'), ('foot', 'terminal'), ('xterm', 'terminal'),
+             ('code', 'vscode'), ('cursor', 'cursor'))
+SKILL_RUN = re.compile(r'skills/execucoes/(sk-[A-Za-z0-9-]+)')
+
+
+def _proc(pid):
+    args = [os.fsdecode(a) for a in (PROC / str(pid) / 'cmdline').read_bytes().split(b'\0') if a]
+    parent = int((PROC / str(pid) / 'stat').read_text().rsplit(')', 1)[1].split()[1])
+    try:
+        cwd = os.readlink(PROC / str(pid) / 'cwd')
+    except OSError:
+        cwd = None
+    return args, parent, cwd
+
+
+def describe_origin(pid):
+    """Who is behind a client process: harness, its project folder and launcher.
+
+    Reads /proc only while the client is still connected, so short CLI calls are
+    resolved before they exit. Returns None when the process is already gone.
+    """
+    chain = []
+    for _ in range(40):
+        if pid <= 1:
+            break
+        try:
+            args, parent, cwd = _proc(pid)
+        except (OSError, ValueError, IndexError):
+            break
+        chain.append((pid, [Path(a).name.lower() for a in args[:2]], ' '.join(args[:6]), cwd))
+        pid = parent
+    if not chain:
+        return None
+    first = chain[0][1]
+    out = {'client_pid': chain[0][0],
+           'client': ('agent-bench-mcp' if 'agent-bench-mcp' in first else
+                      'agent-bench' if 'agent-bench' in first else first[0] if first else None),
+           'harness': None, 'harness_pid': None, 'project': None, 'via': None, 'skill_run': None}
+    above = len(chain)
+    for i, (p, names, text, cwd) in enumerate(chain):
+        if names and names[0].startswith('electron') and 'Daily Work app' in text:
+            out.update(harness='dailywork', harness_pid=p, project=cwd)
+        else:
+            for harness in HARNESSES:
+                if any(n == harness or n.startswith(harness + '-') or n.startswith(harness + '.') for n in names):
+                    out.update(harness=harness, harness_pid=p, project=cwd)
+                    break
+        if out['harness']:
+            above = i + 1
+            break
+    for p, names, text, cwd in chain[above:]:
+        label = next((l for launcher, l in LAUNCHERS if names and (names[0] == launcher or names[0].startswith(launcher + '-'))), None)
+        if label:
+            out['via'] = label
+            break
+    # Only the harness and what started it count: a shell cd'd into the app is not DailyWork.
+    top = chain[max(0, above - 1):]
+    everything = ' '.join(text + ' ' + (cwd or '') for _, _, text, cwd in top)
+    run = SKILL_RUN.search(everything)
+    if run:
+        out['skill_run'] = run.group(1)
+    started_by_app = any(names and names[0].startswith('electron') and 'Daily Work app' in text for _, names, text, _ in top)
+    # DailyWork starts CLIs detached: they end under systemd, so the trace is their folders.
+    detached_in_app = out['via'] is None and 'Daily Work app' in (out['project'] or '')
+    if run or started_by_app or detached_in_app or 'dailywork-grok-scratch' in everything:
+        out['via'] = 'dailywork'
+    return out
+
+
+def record_origin(name, pid, action, keep=12):
+    """Remember the recent distinct clients of a bench, newest first, in its runtime dir."""
+    origin = describe_origin(pid) if pid else None
+    if not origin:
+        return None
+    runtime, _ = paths(name)
+    runtime.mkdir(parents=True, exist_ok=True, mode=0o700)
+    target = runtime / 'origins.json'
+    with (runtime / 'origins.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            items = json.loads(target.read_text())
+            items = items if isinstance(items, list) else []
+        except (OSError, ValueError):
+            items = []
+        key = (origin['harness'], origin['harness_pid'] or origin['client_pid'])
+        now = time.time()
+        previous = next((i for i in items if (i.get('harness'), i.get('harness_pid') or i.get('client_pid')) == key), None)
+        entry = {**origin, 'first_at': (previous or {}).get('first_at', now), 'last_at': now,
+                 'last_action': action, 'count': (previous or {}).get('count', 0) + 1}
+        items = [entry] + [i for i in items if i is not previous][:keep - 1]
+        temp = runtime / ('origins.' + uuid.uuid4().hex + '.tmp')
+        with temp.open('x') as output:
+            os.chmod(temp, 0o600)
+            output.write(json.dumps(items, indent=2) + '\n')
+        temp.replace(target)
+    return entry
+
+
 def claim_owner(name, owner=None):
     """Record actors, without transferring ownership or granting a task lease."""
     owner = owner or infer_owner()
