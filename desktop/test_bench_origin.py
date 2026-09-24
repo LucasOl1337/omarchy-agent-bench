@@ -53,6 +53,12 @@ class OriginTests(unittest.TestCase):
         origin = ops.describe_origin(702)
         self.assertEqual((origin['harness'], origin['via'], origin['skill_run']), ('claude', 'dailywork', 'sk-20260924-133317-ce86'))
 
+    def test_packaged_dailywork_is_the_harness(self):
+        self.fake(500, 1, ['/opt/DailyWork/Daily Work app', '--background'], '/home/u')
+        self.fake(501, 500, ['/opt/DailyWork/Daily Work app', '/app/electron/candidaturas/worker-nativo.cjs'], '/home/u/DailyWork')
+        origin = ops.describe_origin(501)
+        self.assertEqual((origin['harness'], origin['harness_pid'], origin['via']), ('dailywork', 501, 'dailywork'))
+
     def test_gone_process_has_no_origin(self):
         self.assertIsNone(ops.describe_origin(4242))
 

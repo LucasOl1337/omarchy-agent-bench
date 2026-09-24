@@ -232,7 +232,7 @@ def describe_origin(pid):
            'harness': None, 'harness_pid': None, 'project': None, 'via': None, 'skill_run': None}
     above = len(chain)
     for i, (p, names, text, cwd) in enumerate(chain):
-        if names and names[0].startswith('electron') and 'Daily Work app' in text:
+        if names and (names[0].startswith('electron') or names[0] in ('daily work app', 'dailywork')) and ('Daily Work app' in text or names[0] != 'electron'):
             out.update(harness='dailywork', harness_pid=p, project=cwd)
         else:
             for harness in HARNESSES:
@@ -253,7 +253,7 @@ def describe_origin(pid):
     run = SKILL_RUN.search(everything)
     if run:
         out['skill_run'] = run.group(1)
-    started_by_app = any(names and names[0].startswith('electron') and 'Daily Work app' in text for _, names, text, _ in top)
+    started_by_app = out['harness'] == 'dailywork' or any(names and names[0].startswith('electron') and 'Daily Work app' in text for _, names, text, _ in top)
     # DailyWork starts CLIs detached: they end under systemd, so the trace is their folders.
     detached_in_app = out['via'] is None and 'Daily Work app' in (out['project'] or '')
     if run or started_by_app or detached_in_app or 'dailywork-grok-scratch' in everything:
