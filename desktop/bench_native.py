@@ -12,7 +12,7 @@ BROWSER_UNBOUND_TOOLS = frozenset(('page', 'get_browser_state', 'browser_prepare
     'browser_navigate', 'browser_click', 'browser_type', 'browser_dialog',
     'browser_set_input_files', 'browser_download', 'browser_pointer'))
 NATIVE_UNSUPPORTED_TOOLS = BROWSER_UNBOUND_TOOLS | {'get_accessibility_tree', 'replay_trajectory',
-                                                  'set_config', 'launch_app'}
+                                                  'set_config', 'launch_app', 'install_extension'}
 FOREGROUND_DEFAULT_TOOLS = frozenset(('click', 'double_click', 'right_click', 'drag',
                                     'type_text', 'press_key', 'hotkey', 'scroll'))
 DELIVERY_MODE_DESCRIPTION = (
@@ -183,6 +183,9 @@ def guard_request(bench, message):
         raise NativeIsolationError('NATIVE_CONFIG_GLOBAL: set_config persiste configuração em HOME compartilhado; '
                                    'use max_dimension por chamada de get_window_state para limitar a imagem, '
                                    'sem elevar o teto configurado. Não há chave efêmera segura em set_config.')
+    if tool == 'install_extension':
+        raise NativeIsolationError('NATIVE_EXTENSION_GLOBAL: install_extension grava extensão do driver em HOME '
+                                   'compartilhado e vale para todas as bancadas; instalação fica com o humano.')
     if tool in BROWSER_UNBOUND_TOOLS:
         raise NativeIsolationError('NATIVE_BROWSER_UNBOUND: ferramenta sem vínculo comprovado com bancada '
                                    'e missão; use bench_web ou bench_cdp com superfície validada.')

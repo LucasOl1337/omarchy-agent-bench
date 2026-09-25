@@ -352,6 +352,14 @@ class NativeIsolation(unittest.TestCase):
                         native.guard_request('fixture', self.message('set_config', **arguments, **pid))
             guard.assert_not_called()
 
+    def test_install_extension_rejects_preview_and_confirm_before_process_inspection(self):
+        with patch.object(native, 'NativeGuard') as guard:
+            for arguments in ({}, {'confirm': True}, {'pid': 200, 'confirm': True}):
+                with self.subTest(arguments=arguments), \
+                     self.assertRaisesRegex(native.NativeIsolationError, 'NATIVE_EXTENSION_GLOBAL'):
+                    native.guard_request('fixture', self.message('install_extension', **arguments))
+            guard.assert_not_called()
+
     def test_hub_launch_app_never_reaches_driver_or_server_but_bench_launch_does(self):
         hub = Hub()
         with patch('bench_hub_mcp.ensure', return_value={}), \
