@@ -83,6 +83,52 @@ def save():
         temp.write_text(content)
         temp.replace(path)
 
+BAR = RUNTIME / 'bar.json'
+_last_bar = None
+
+
+def bar_state(now=None):
+    """What the Omarchy bar shows per bench: who drives it and whether it is working."""
+    from bench_ops import STATE, VAULT, EPHEMERAL_MARK
+    now = time.time() if now is None else now
+    benches = {}
+    for name, entry in entries.items():
+        runtime = RUNTIME / name
+        try:
+            record = json.loads((runtime / 'owner.json').read_text())
+            owner = record.get('last_actor') or record.get('owner') or 'unknown'
+        except (OSError, ValueError, AttributeError):
+            owner = 'unknown'
+        try:
+            idle = max(0, int(now - float((runtime / 'last_activity').read_text().strip())))
+        except (OSError, ValueError):
+            idle = None
+        if idle is not None and idle >= 60:
+            idle -= idle % 10
+        profile = STATE / name / 'chromium'
+        if name == VAULT:
+            kind = 'cofre'
+        elif profile.is_dir() and not (profile / EPHEMERAL_MARK).exists():
+            kind = 'persistente'  # an old copy of the seed
+        else:
+            kind = 'descartavel'
+        benches[name] = {'workspace': entry.get('workspace'), 'owner': owner,
+                         'active': idle is not None and idle < 60, 'idle_seconds': idle,
+                         'human': (runtime / 'human-control').exists(), 'kind': kind}
+    return benches
+
+
+def publish_bar():
+    global _last_bar
+    benches = bar_state()
+    if benches == _last_bar:
+        return
+    temp = BAR.with_suffix('.json.tmp')
+    temp.write_text(json.dumps({'updated': time.time(), 'benches': benches}, ensure_ascii=False) + '\n')
+    temp.replace(BAR)
+    _last_bar = benches
+
+
 def rules():
     hypr('eval', 'dofile(' + json.dumps(str(CONFIG)) + ')')
 
@@ -174,17 +220,41 @@ def handoff(name, human):
         hold = runtime / 'human-control'
         if human:
             ensure(name)
+            held_before = hold.exists()
             hold.touch(mode=0o600)
             try:
                 rpc(runtime / 'control.sock', {'action': 'human-input', 'enabled': True})
-            except Exception:
-                # Stay paused if the input toggle failed midway.
-                raise
+            except Exception as exc:
+                # Roll back only this attempt's pause when the server confirms
+                # input is still disabled. Unknown state or an older pause stays.
+                state = None
+                try:
+                    state = live(name).get('human_input')
+                except Exception:
+                    pass
+                if (not held_before and isinstance(state, dict)
+                        and state.get('confirmed') is True and state.get('enabled') is False):
+                    hold.unlink(missing_ok=True)
+                raise RuntimeError(f'A bancada {name} não liberou mouse/teclado: {exc}. '
+                                   + tasks_hint(info)) from exc
         else:
             rpc(runtime / 'control.sock', {'action': 'human-input', 'enabled': False})
             hold.unlink(missing_ok=True)
             dock(name)
     return {**entries[name], 'name': name, 'mode': 'humano' if human else 'agente'}
+
+def tasks_hint(info):
+    info = info if isinstance(info, dict) else {}
+    tasks = info.get('tasks')
+    if isinstance(tasks, dict):
+        current, maximum = tasks.get('current'), tasks.get('max')
+        if (type(current) is int and type(maximum) is int and maximum > 0
+                and current >= 0 and current * 10 >= maximum * 9):
+            return (f'O cgroup da bancada está com {current}/{maximum} tarefas; '
+                    'libere tarefas da bancada antes de tentar novamente.')
+    name = info.get('name')
+    name = name if isinstance(name, str) and name else 'NOME'
+    return f'Veja journalctl --user -u agent-bench@{name}.service.'
 
 def resolve(name):
     return focused_bench_name() if name in HERE else name
@@ -285,6 +355,7 @@ def main():
                 try:
                     scan()
                     release_departed()
+                    publish_bar()
                 except Exception as exc: print('agent-bench-views:', exc, flush=True)
                 next_scan = time.monotonic() + 1
             if time.monotonic() >= next_reap:

@@ -10,6 +10,7 @@ import secrets
 import signal
 import socket
 import socketserver
+import struct
 import subprocess
 import sys
 import threading
@@ -19,8 +20,8 @@ BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE / 'desktop'))
 from bench_control import control, views
 from bench_ops import (RUNTIME, STATE, cdp_snapshot, claim_owner, ensure,
-                       gc_sessions, keep_session, load_owner, open_browser, paths, request, start,
-                       touch_activity, valid, wait_cdp, bench_browser_snapshot)
+                       gc_sessions, keep_session, load_owner, open_browser, paths, record_origin, request, start,
+                       touch_activity, valid, wait_cdp, bench_browser_snapshot, stop, close_browser)
 DROP = ('DISPLAY', 'WAYLAND_DISPLAY', 'WAYLAND_SOCKET', 'XAUTHORITY',
         'HYPRLAND_INSTANCE_SIGNATURE', 'DBUS_SESSION_BUS_ADDRESS',
         'DBUS_STARTER_ADDRESS', 'DBUS_STARTER_BUS_TYPE', 'AT_SPI_BUS_ADDRESS',
@@ -45,7 +46,9 @@ def boot(name):
                XDG_CACHE_HOME=str(state / 'cache'), XDG_DATA_HOME=str(state / 'data'),
                XDG_STATE_HOME=str(state / 'state'), XDG_SESSION_TYPE='x11',
                XDG_CURRENT_DESKTOP='Openbox', GDK_BACKEND='x11', QT_QPA_PLATFORM='xcb',
-               GTK_USE_PORTAL='0', LIBGL_ALWAYS_SOFTWARE='1')
+               GTK_USE_PORTAL='0', LIBGL_ALWAYS_SOFTWARE='1',
+               # The private session bus has no systemd manager for broker activation.
+               ATSPI_DBUS_IMPLEMENTATION='dbus-daemon')
     os.execve('/usr/bin/dbus-run-session', ['dbus-run-session', '--', str(Path(__file__).resolve()), '_serve', name], env)
 
 def cgroup_tasks():
@@ -124,6 +127,13 @@ def serve(name):
                 if xvnc.poll() is not None: raise RuntimeError('Display indisponível; sem fallback para o host')
                 if action != 'status':
                     touch_activity(name)
+                if action not in ('status', 'human-input'):
+                    # The human sees which agent, project and launcher drive this bench.
+                    try:
+                        peer = self.request.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize('3i'))
+                        record_origin(name, struct.unpack('3i', peer)[0], action)
+                    except (OSError, ValueError, struct.error):
+                        pass
                 if action == 'status':
                     result = {**info, 'control_mode': 'humano' if (runtime / 'human-control').exists() else 'agente',
                               'owner': load_owner(name).get('owner'), 'human_input': dict(human_input),
@@ -223,8 +233,8 @@ def main():
                         help='collaborate/resume/visit/close-here na bancada da janela ou workspace focado')
     parser.add_argument('action', choices=['start', 'stop', 'status', 'list', 'exec', 'launch',
                         'browser', 'home', 'terminal', 'tools', 'doctor', 'screenshot', 'clipboard', 'view', 'mcp',
-                        'collaborate', 'resume', 'dock', 'ensure', 'cdp', 'browser-status', 'gc', 'keep', 'visit', 'close-here',
-                        '_boot', '_serve'])
+                        'collaborate', 'resume', 'dock', 'ensure', 'cdp', 'browser-status', 'gc', 'keep', 'visit', 'close-here', 'fila',
+                        '_boot', '_serve', '_close-browser'])
     parser.add_argument('name', nargs='?', default=None)
     parser.add_argument('args', nargs=argparse.REMAINDER)
     a = parser.parse_args()
@@ -232,6 +242,21 @@ def main():
     if a.action == 'gc':
         apply = a.name == '--apply' or '--apply' in a.args or '--apply' in argv
         print(json.dumps(gc_sessions(apply=apply), indent=2, ensure_ascii=False)); return 0
+    if a.action == 'fila':
+        # agent-bench fila [NOME [entrar MOTIVO | sair | status | rodar -- CMD]]
+        import bench_fila
+        sub = argv[0] if argv else ('entrar' if a.name and a.name != 'status' else 'status')
+        if sub == 'status' or not a.name or a.name == 'status':
+            print(json.dumps(bench_fila.status(), indent=2, ensure_ascii=False)); return 0
+        if sub == 'entrar':
+            print(json.dumps(bench_fila.entrar(a.name, ' '.join(argv[1:])), indent=2, ensure_ascii=False)); return 0
+        if sub == 'sair':
+            print(json.dumps(bench_fila.sair(a.name), indent=2, ensure_ascii=False)); return 0
+        if sub == 'rodar':
+            cmd = argv[2:] if argv[1:2] == ['--'] else argv[1:]
+            if not cmd: raise ValueError('Use: agent-bench fila NOME rodar -- COMANDO')
+            return bench_fila.rodar(a.name, cmd)
+        raise ValueError('Use: agent-bench fila [NOME entrar MOTIVO | sair | rodar -- CMD]')
     if a.action == 'close-here':
         from bench_human import close_here
         print(json.dumps(close_here(), indent=2)); return 0
@@ -257,9 +282,11 @@ def main():
         from toolkit import catalog
         print(json.dumps(catalog(), ensure_ascii=False, indent=2)); return 0
     if a.action == '_boot': return boot(name)
+    if a.action == '_close-browser':
+        print(json.dumps(close_browser(name))); return 0
     if a.action == '_serve': return serve(name)
     if a.action == 'stop':
-        return subprocess.run(['systemctl', '--user', 'stop', f'agent-bench@{name}.service']).returncode
+        return stop(name).returncode
     if a.action == 'list':
         found = []
         for p in sorted(RUNTIME.glob('*/control.sock')):

@@ -14,11 +14,34 @@ The supervisor (`agent-bench-views.service`) only assigns 6–11. If all six hav
 
 ## Taking control
 
-The panel **Agent benches** (launcher) lists live names. Super+6… visits without pausing the agent (view-only). Bind **Super+Alt+A** to `agent-bench collaborate --here` if you want a keyboard shortcut.
+The panel **Agent benches** (launcher) lists live names. The generic installer and
+`contrib/omarchy/agent-bench.lua` install viewer/workspace rules, not keyboard
+bindings. An ordinary workspace switch only shows the viewer; it does not pause
+agent input or enable human input. Existing human control remains in effect.
 
-1. **Show screen** — reopen the viewer on its reserved workspace without changing *your* active workspace.
-2. **Take control** / Super+Alt+A — waits until the current agent command finishes, then enables keyboard/mouse on the viewer and pauses agent input.
-3. **Give back to agent** — also happens automatically when the reserved workspace is no longer visible on any monitor (Super+1 on the monitor that was showing it). Disables viewer input, allows MCP/`exec` again, docks the window.
+1. **Show screen** — a human button action that reopens and focuses the viewer on its reserved workspace, without taking control. Agent-side `ensure` only places the viewer and does not follow the human.
+2. **Take control** — a human button action that enables viewer keyboard/mouse and pauses agent input. If an agent command holds the input lock, it returns a busy error; retry after the command finishes. It does not queue a handoff.
+3. **Give back to agent** — also happens automatically after the reserved workspace is no longer visible on any monitor (for example, Super+1 on the monitor that was showing it). Disables viewer input, allows MCP/`exec` again, docks the window.
+
+For a single human action that both enters and takes control, run
+`agent-bench visit NAME`. `agent-bench visit 6` through `11` selects the unique
+bench on that workspace; when several benches share it, use the bench name. A
+workspace with no bench can be visited but grants no bench control. `visit`
+focuses the host workspace/viewer, so it is a **human command**, not an agent route.
+The human can also bind `agent-bench collaborate --here` to a takeover shortcut.
+
+**Mark configuration:** its existing `bindings.lua` maps **Super+6** … **Super+9**,
+**Super+0** (10) and **Super+Ctrl+0** (11) to `visit`, which requests control as part
+of entering. **Super+Alt+A** calls `collaborate --here`. These are local bindings,
+not defaults installed by this package. Other installations must check their own
+configuration before relying on a shortcut.
+
+If enabling human input fails, the supervisor removes only the pause created by
+that attempt, and only when the server explicitly confirms input remains disabled.
+An older human pause, enabled input or uncertain status keeps the pause. The error
+includes task usage when the bench reports at least 90% of a finite task limit;
+otherwise it points to that bench's service log. This does not restart the bench
+or grant the agent permission to call `resume`.
 
 Agents must not call `resume` unless the human asked. `exec`, `launch`, `browser`, clipboard write, and MCP already apply the lock and dock the viewer.
 

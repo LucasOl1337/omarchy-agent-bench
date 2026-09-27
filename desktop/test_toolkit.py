@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import bench_views as views
+import bench_ops as ops
 from toolkit import inspect, catalog
 
 class Allocation(unittest.TestCase):
@@ -24,14 +25,31 @@ class Allocation(unittest.TestCase):
 class Diagnostics(unittest.TestCase):
     def test_closed_browser_and_unreserved_workspace_reported(self):
         with tempfile.TemporaryDirectory() as folder:
-            result=inspect('fixture',{'state':folder,'display':':999'}, {'workspace':1})
+            with patch.object(ops, 'STATE', Path(folder)):
+                result=inspect('fixture',{'state':folder,'display':':999'}, {'workspace':1})
             self.assertFalse(result['workspace_reserved']);self.assertFalse(result['display_socket']);self.assertEqual(result['browser']['status'],'fechado')
     def test_invalid_endpoint_does_not_fallback_to_personal_browser(self):
         with tempfile.TemporaryDirectory() as folder:
-            endpoint=Path(folder)/'chromium/DevToolsActivePort';endpoint.parent.mkdir();endpoint.write_text('invalid')
-            with patch('bench_ops.build_opener') as opener:
+            endpoint=Path(folder)/'fixture/chromium/DevToolsActivePort';endpoint.parent.mkdir(parents=True);endpoint.write_text('invalid')
+            with patch.object(ops, 'STATE', Path(folder)), patch('bench_ops.build_opener') as opener:
                 result=inspect('fixture',{'state':folder}, {'workspace':11})
-                opener.assert_not_called();self.assertTrue(result['workspace_reserved']);self.assertIn('sem conexão',result['browser']['status'])
+                opener.assert_not_called();self.assertTrue(result['workspace_reserved']);self.assertEqual('fechado',result['browser']['status'])
+    def test_doctor_refuses_human_or_neighbor_without_cdp_request(self):
+        for location in (None, 'neighbor'):
+            with self.subTest(location=location), \
+                 patch.object(ops, 'profile_process', return_value={'pid': 42, 'bench': location}), \
+                 patch.object(ops, 'cdp_snapshot') as cdp:
+                result=inspect('fixture', {'state': '/untrusted/state'}, {'workspace': 8})
+                self.assertEqual('bloqueado', result['browser']['status'])
+                self.assertNotIn('browser_url', result['browser'])
+                cdp.assert_not_called()
+    def test_doctor_reads_only_verified_bench_profile(self):
+        with patch.object(ops, 'profile_process', return_value={'pid': 42, 'bench': 'fixture'}), \
+             patch.object(ops, '_main_chromium_pids', return_value=[42]), \
+             patch.object(ops, 'cdp_snapshot', return_value={'status': 'conectado'}) as cdp:
+            result=inspect('fixture', {'state': '/untrusted/state'}, {'workspace': 8})
+            cdp.assert_called_once_with(ops.STATE / 'fixture', include_pages=True)
+            self.assertEqual('fixture', result['browser']['lives_in'])
     def test_catalog_reports_missing_tools_honestly(self):
         with patch('toolkit.shutil.which',return_value=None):
             self.assertTrue(all(not row['available'] for row in catalog()))

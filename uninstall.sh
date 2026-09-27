@@ -33,6 +33,8 @@ rm -f "$HOME/.local/bin/agent-bench" "$HOME/.local/bin/agent-bench-mcp"
 rm -f "$HOME/.local/share/applications/agent-bench.desktop"
 rm -f "$HOME/.config/systemd/user/agent-bench@.service"
 rm -f "$HOME/.config/systemd/user/agent-bench-views.service"
+rm -f "$HOME/.config/systemd/user/agent-bench@.service.d/10-cota.conf"
+rm -f "$HOME/.config/systemd/user/app-agent\\x2dbench.slice.d/prioridade.conf"
 
 if [[ -f "$HOME/.config/hypr/hyprland.lua" ]]; then
   python3 - <<'PY'
