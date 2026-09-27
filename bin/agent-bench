@@ -233,7 +233,7 @@ def main():
                         help='collaborate/resume/visit/close-here na bancada da janela ou workspace focado')
     parser.add_argument('action', choices=['start', 'stop', 'status', 'list', 'exec', 'launch',
                         'browser', 'home', 'terminal', 'tools', 'doctor', 'screenshot', 'clipboard', 'view', 'mcp',
-                        'collaborate', 'resume', 'dock', 'ensure', 'cdp', 'browser-status', 'gc', 'keep', 'visit', 'close-here',
+                        'collaborate', 'resume', 'dock', 'ensure', 'cdp', 'browser-status', 'gc', 'keep', 'visit', 'close-here', 'fila',
                         '_boot', '_serve', '_close-browser'])
     parser.add_argument('name', nargs='?', default=None)
     parser.add_argument('args', nargs=argparse.REMAINDER)
@@ -242,6 +242,21 @@ def main():
     if a.action == 'gc':
         apply = a.name == '--apply' or '--apply' in a.args or '--apply' in argv
         print(json.dumps(gc_sessions(apply=apply), indent=2, ensure_ascii=False)); return 0
+    if a.action == 'fila':
+        # agent-bench fila [NOME [entrar MOTIVO | sair | status | rodar -- CMD]]
+        import bench_fila
+        sub = argv[0] if argv else ('entrar' if a.name and a.name != 'status' else 'status')
+        if sub == 'status' or not a.name or a.name == 'status':
+            print(json.dumps(bench_fila.status(), indent=2, ensure_ascii=False)); return 0
+        if sub == 'entrar':
+            print(json.dumps(bench_fila.entrar(a.name, ' '.join(argv[1:])), indent=2, ensure_ascii=False)); return 0
+        if sub == 'sair':
+            print(json.dumps(bench_fila.sair(a.name), indent=2, ensure_ascii=False)); return 0
+        if sub == 'rodar':
+            cmd = argv[2:] if argv[1:2] == ['--'] else argv[1:]
+            if not cmd: raise ValueError('Use: agent-bench fila NOME rodar -- COMANDO')
+            return bench_fila.rodar(a.name, cmd)
+        raise ValueError('Use: agent-bench fila [NOME entrar MOTIVO | sair | rodar -- CMD]')
     if a.action == 'close-here':
         from bench_human import close_here
         print(json.dumps(close_here(), indent=2)); return 0

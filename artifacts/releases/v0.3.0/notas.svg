@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="2034" viewBox="0 0 1200 2034">
+<defs><linearGradient id="bg" x1="0" y1="0" x2="0.4" y2="1"><stop offset="0" stop-color="#160D31"/><stop offset=".55" stop-color="#211442"/><stop offset="1" stop-color="#28184D"/></linearGradient>
+<linearGradient id="pill" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#C98A6B"/><stop offset="1" stop-color="#8E5BEA"/></linearGradient></defs>
+<rect width="1200" height="2034" fill="url(#bg)"/>
+<line x1="870" y1="30" x2="1190" y2="300" stroke="#FFFFFF" stroke-opacity=".06" stroke-width="2"/>
+<line x1="950" y1="30" x2="1190" y2="230" stroke="#FFFFFF" stroke-opacity=".05" stroke-width="2"/>
+<path d="M28 80V28h52M1120 28h52v52M28 1954v52h52M1120 2006h52v-52" fill="none" stroke="#5B4A80" stroke-width="2"/>
+<text x="56" y="92" font-family="Noto Sans, Inter, sans-serif" font-size="50" font-weight="800" fill="#FFF8EE">Agent Bench</text>
+<rect x="392" y="52" width="130" height="52" rx="26" fill="url(#pill)"/>
+<text x="457" y="88" font-family="Noto Sans, Inter, sans-serif" font-size="26" font-weight="700" fill="#FFF8EE" text-anchor="middle">v0.3.0</text>
+<text x="1144" y="70" font-family="Noto Sans, Inter, sans-serif" font-size="20" font-weight="800" letter-spacing="3" fill="#C9B6FF" text-anchor="end">OMARCHY</text>
+<text x="1144" y="104" font-family="Noto Sans, Inter, sans-serif" font-size="20" fill="#E9E2F5" text-anchor="end">27 de setembro de 2026</text>
+<text x="56" y="140" font-family="Noto Sans, Inter, sans-serif" font-size="21" font-weight="800" letter-spacing="3.5" fill="#FFC98A">NOTAS DA ATUALIZAÇÃO</text>
+<line x1="56" y1="170" x2="1144" y2="170" stroke="#4A3A6E" stroke-width="2"/>
+<text x="56" y="212" font-family="Noto Sans, Inter, sans-serif" font-size="20" fill="#BCB1D2">Bancadas com login estável, MCP enxuto e fila pra trabalho pesado · cor = categoria · tag = área</text>
+<rect x="56" y="244" width="6" height="36" rx="3" fill="#FFC61A"/>
+<text x="82" y="272" font-family="Noto Sans, Inter, sans-serif" font-size="25" font-weight="800" letter-spacing="3" fill="#FFC61A">NOVIDADES</text>
+<text x="1144" y="270" font-family="Noto Sans, Inter, sans-serif" font-size="19" fill="#9D93B5" text-anchor="end">5 itens</text>
+<circle cx="84" cy="328" r="6" fill="#FFC61A"/>
+<text x="106" y="336" font-family="Noto Sans, Inter, sans-serif" font-size="24"><tspan font-weight="700" fill="#FFF8EE">Fila pesada</tspan><tspan fill="#FFE08A" dx="14">· 3D e vídeo em sequência, uma vaga por vez</tspan></text>
+<text x="1144" y="336" font-family="Noto Sans, Inter, sans-serif" font-size="17" font-weight="700" letter-spacing="2" fill="#BCB1D2" text-anchor="end">CLI</text>
+<circle cx="84" cy="386" r="6" fill="#FFC61A"/>
+<text x="106" y="394" font-family="Noto Sans, Inter, sans-serif" font-size="24"><tspan font-weight="700" fill="#FFF8EE">Origem de cada bancada</tspan><tspan fill="#FFE08A" dx="14">· agente, projeto e lançador registrados</tspan></text>
+<text x="1144" y="394" font-family="Noto Sans, Inter, sans-serif" font-size="17" font-weight="700" letter-spacing="2" fill="#BCB1D2" text-anchor="end">BANCADA</text>
+<circle cx="84" cy="444" r="6" fill="#FFC61A"/>
+<text x="106" y="452" font-family="Noto Sans, Inter, sans-serif" font-size="24"><tspan font-weight="700" fill="#FFF8EE">Navegação por acessibilidade</tspan><tspan fill="#FFE08A" dx="14">· snapshot, refs e abas por missão</tspan></text>
+<text x="1144" y="452" font-family="Noto Sans, Inter, sans-serif" font-size="17" font-weight="700" letter-spacing="2" fill="#BCB1D2" text-anchor="end">WEB</text>
+<circle cx="84" cy="502" r="6" fill="#FFC61A"/>
+<text x="106" y="510" font-family="Noto Sans, Inter, sans-serif" font-size="24"><tspan font-weight="700" fill="#FFF8EE">Chromium convencional</tspan><tspan fill="#FFE08A" dx="14">· opcional, com controle nativo</tspan></text>
+<text x="1144" y="510" font-family="Noto Sans, Inter, sans-serif" font-size="17" font-weight="700" letter-spacing="2" fill="#BCB1D2" text-anchor="end">NATIVO</text>
+<circle cx="84" cy="560" r="6" fill="#FFC61A"/>
+<text x="106" y="568" font-family="Noto Sans, Inter, sans-serif" font-size="24"><tspan font-weight="700" fill="#FFF8EE">Preparo de perfil</tspan><tspan fill="#FFE08A" dx="14">· semente offline, simulação por padrão</tspan></text>
+<text x="1144" y="568" font-family="Noto Sans, Inter, sans-serif" font-size="17" font-weight="700" letter-spacing="2" fill="#BCB1D2" text-anchor="end">PERFIL</text>
+<line x1="56" y1="616" x2="1144" y2="616" stroke="#3B2E5C" stroke-width="1.5"/>
+<rect x="56" y="666" width="6" height="36" rx="3" fill="#2DD29A"/>
+<text x="82" y="694" font-family="Noto Sans, Inter, sans-serif" font-size="25" font-weight="800" letter-spacing="3" fill="#2DD29A">MELHORIAS</text>
+<text x="1144" y="692" font-family="Noto Sans, Inter, sans-serif" font-size="19" fill="#9D93B5" text-anchor="end">4 itens</text>
+<circle cx="84" cy="750" r="6" fill="#2DD29A"/>
+<text x="106" y="758" font-family="Noto Sans, Inter, sans-serif" font-size="24"><tspan font-weight="700" fill="#FFF8EE">MCP mais leve</tspan><tspan fill="#9BEBCB" dx="14">· 20 ferramentas, ~8,4k tokens em vez de ~20k</tspan></text>
+<text x="1144" y="758" font-family="Noto Sans, Inter, sans-serif" font-size="17" font-weight="700" letter-spacing="2" fill="#BCB1D2" text-anchor="end">MCP</text>
+<circle cx="84" cy="808" r="6" fill="#2DD29A"/>
+<text x="106" y="816" font-family="Noto Sans, Inter, sans-serif" font-size="24"><tspan font-weight="700" fill="#FFF8EE">Ociosa fecha sozinha</tspan><tspan fill="#9BEBCB" dx="14">· 25 min sem agente, CDP ou CPU real</tspan></text>
+<text x="1144" y="816" font-family="Noto Sans, Inter, sans-serif" font-size="17" font-weight="700" letter-spacing="2" fill="#BCB1D2" text-anchor="end">BANCADA</text>
+<circle cx="84" cy="866" r="6" fill="#2DD29A"/>
+<text x="106" y="874" font-family="Noto Sans, Inter, sans-serif" font-size="24"><tspan font-weight="700" fill="#FFF8EE">Barra do Omarchy</tspan><tspan fill="#9BEBCB" dx="14">· dono, atividade e tipo de cada bancada</tspan></text>
+<text x="1144" y="874" font-family="Noto Sans, Inter, sans-serif" font-size="17" font-weight="700" letter-spacing="2" fill="#BCB1D2" text-anchor="end">DESKTOP</text>
+<circle cx="84" cy="924" r="6" fill="#2DD29A"/>
+<text x="106" y="932" font-family="Noto Sans, Inter, sans-serif" font-size="24"><tspan font-weight="700" fill="#FFF8EE">Visita sem erro</tspan><tspan fill="#9BEBCB" dx="14">· cai num workspace compartilhado</tspan></text>
+<text x="1144" y="932" font-family="Noto Sans, Inter, sans-serif" font-size="17" font-weight="700" letter-spacing="2" fill="#BCB1D2" text-anchor="end">DESKTOP</text>
+<line x1="56" y1="980" x2="1144" y2="980" stroke="#3B2E5C" stroke-width="1.5"/>
+<rect x="56" y="1030" width="6" height="36" rx="3" fill="#30BCEF"/>
+<text x="82" y="1058" font-family="Noto Sans, Inter, sans-serif" font-size="25" font-weight="800" letter-spacing="3" fill="#30BCEF">CORREÇÕES</text>
+<text x="1144" y="1056" font-family="Noto Sans, Inter, sans-serif" font-size="19" fill="#9D93B5" text-anchor="end">6 itens</text>
+<circle cx="84" cy="1114" r="6" fill="#30BCEF"/>
+<text x="106" y="1122" font-family="Noto Sans, Inter, sans-serif" font-size="24"><tspan font-weight="700" fill="#FFF8EE">Cloudflare deixa logar</tspan><tspan fill="#9ADCF6" dx="14">· porta CDP fixa e GPU real, testado em 23/09</tspan></text>
+<text x="1144" y="1122" font-family="Noto Sans, Inter, sans-serif" font-size="17" font-weight="700" letter-spacing="2" fill="#BCB1D2" text-anchor="end">NAVEGADOR</text>
+<circle cx="84" cy="1172" r="6" fill="#30BCEF"/>
+<text x="106" y="1180" font-family="Noto Sans, Inter, sans-serif" font-size="24"><tspan font-weight="700" fill="#FFF8EE">Um Chromium por perfil</tspan><tspan fill="#9ADCF6" dx="14">· trava exclusiva no ensure paralelo</tspan></text>
+<text x="1144" y="1180" font-family="Noto Sans, Inter, sans-serif" font-size="17" font-weight="700" letter-spacing="2" fill="#BCB1D2" text-anchor="end">NAVEGADOR</text>
+<circle cx="84" cy="1230" r="6" fill="#30BCEF"/>
+<text x="106" y="1238" font-family="Noto Sans, Inter, sans-serif" font-size="24"><tspan font-weight="700" fill="#FFF8EE">CDP liberado</tspan><tspan fill="#9ADCF6" dx="14">· checagem de perfil não bloqueia mais</tspan></text>
+<text x="1144" y="1238" font-family="Noto Sans, Inter, sans-serif" font-size="17" font-weight="700" letter-spacing="2" fill="#BCB1D2" text-anchor="end">NAVEGADOR</text>
+<circle cx="84" cy="1288" r="6" fill="#30BCEF"/>
+<text x="106" y="1296" font-family="Noto Sans, Inter, sans-serif" font-size="24"><tspan font-weight="700" fill="#FFF8EE">Cookies salvos ao parar</tspan><tspan fill="#9ADCF6" dx="14">· Chromium fecha antes do Xvnc</tspan></text>
+<text x="1144" y="1296" font-family="Noto Sans, Inter, sans-serif" font-size="17" font-weight="700" letter-spacing="2" fill="#BCB1D2" text-anchor="end">BANCADA</text>
+<circle cx="84" cy="1346" r="6" fill="#30BCEF"/>
+<text x="106" y="1354" font-family="Noto Sans, Inter, sans-serif" font-size="24"><tspan font-weight="700" fill="#FFF8EE">Reaper voltou a funcionar</tspan><tspan fill="#9ADCF6" dx="14">· inventário não fica mais desconhecido</tspan></text>
+<text x="1144" y="1354" font-family="Noto Sans, Inter, sans-serif" font-size="17" font-weight="700" letter-spacing="2" fill="#BCB1D2" text-anchor="end">BANCADA</text>
+<circle cx="84" cy="1404" r="6" fill="#30BCEF"/>
+<text x="106" y="1412" font-family="Noto Sans, Inter, sans-serif" font-size="24"><tspan font-weight="700" fill="#FFF8EE">Instalador preserva o hub</tspan><tspan fill="#9ADCF6" dx="14">· mexe só nos próprios arquivos</tspan></text>
+<text x="1144" y="1412" font-family="Noto Sans, Inter, sans-serif" font-size="17" font-weight="700" letter-spacing="2" fill="#BCB1D2" text-anchor="end">INSTALADOR</text>
+<line x1="56" y1="1460" x2="1144" y2="1460" stroke="#3B2E5C" stroke-width="1.5"/>
+<rect x="56" y="1510" width="6" height="36" rx="3" fill="#AA88FA"/>
+<text x="82" y="1538" font-family="Noto Sans, Inter, sans-serif" font-size="25" font-weight="800" letter-spacing="3" fill="#AA88FA">SISTEMAS</text>
+<text x="1144" y="1536" font-family="Noto Sans, Inter, sans-serif" font-size="19" fill="#9D93B5" text-anchor="end">4 itens</text>
+<circle cx="84" cy="1594" r="6" fill="#AA88FA"/>
+<text x="106" y="1602" font-family="Noto Sans, Inter, sans-serif" font-size="24"><tspan font-weight="700" fill="#FFF8EE">Perfis sem cópia</tspan><tspan fill="#D2C0FC" dx="14">· bancada nova descartável, cofre persistente</tspan></text>
+<text x="1144" y="1602" font-family="Noto Sans, Inter, sans-serif" font-size="17" font-weight="700" letter-spacing="2" fill="#BCB1D2" text-anchor="end">PERFIL</text>
+<circle cx="84" cy="1652" r="6" fill="#AA88FA"/>
+<text x="106" y="1660" font-family="Noto Sans, Inter, sans-serif" font-size="24"><tspan font-weight="700" fill="#FFF8EE">cua-driver 0.29</tspan><tspan fill="#D2C0FC" dx="14">· install_extension recusado</tspan></text>
+<text x="1144" y="1660" font-family="Noto Sans, Inter, sans-serif" font-size="17" font-weight="700" letter-spacing="2" fill="#BCB1D2" text-anchor="end">NATIVO</text>
+<circle cx="84" cy="1710" r="6" fill="#AA88FA"/>
+<text x="106" y="1718" font-family="Noto Sans, Inter, sans-serif" font-size="24"><tspan font-weight="700" fill="#FFF8EE">Cotas de CPU</tspan><tspan fill="#D2C0FC" dx="14">· drop-ins da fila no instalador</tspan></text>
+<text x="1144" y="1718" font-family="Noto Sans, Inter, sans-serif" font-size="17" font-weight="700" letter-spacing="2" fill="#BCB1D2" text-anchor="end">SYSTEMD</text>
+<circle cx="84" cy="1768" r="6" fill="#AA88FA"/>
+<text x="106" y="1776" font-family="Noto Sans, Inter, sans-serif" font-size="24"><tspan font-weight="700" fill="#FFF8EE">Guias novos</tspan><tspan fill="#D2C0FC" dx="14">· nativo, CUA, retenção e Jcode</tspan></text>
+<text x="1144" y="1776" font-family="Noto Sans, Inter, sans-serif" font-size="17" font-weight="700" letter-spacing="2" fill="#BCB1D2" text-anchor="end">DOCS</text>
+<line x1="56" y1="1844" x2="1144" y2="1844" stroke="#4A3A6E" stroke-width="1.5"/>
+<text x="56" y="1896" font-family="Noto Sans, Inter, sans-serif" font-size="24" font-weight="700" fill="#FFC98A">Cada agente na sua bancada, sem roubar a tela de ninguém.</text>
+<text x="56" y="1936" font-family="Noto Sans, Inter, sans-serif" font-size="19" fill="#BCB1D2">Notas completas e auditoria no GitHub Releases · github.com/LucasOl1337/omarchy-agent-bench</text>
+<text x="56" y="1990" font-family="Noto Sans, Inter, sans-serif" font-size="18" font-weight="800" letter-spacing="4" fill="#8E82AB">OMARCHY AGENT BENCH</text>
+</svg>

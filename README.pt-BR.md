@@ -12,13 +12,13 @@ Agentes de código no desktop pessoal pegam o mouse, abrem aba no Chromium human
 
 | Peça | Função |
 | --- | --- |
-| `agent-bench` | CLI: `ensure`, `cdp`, `browser`, `exec`, `keep`, `gc`, … |
+| `agent-bench` | CLI: `ensure`, `cdp`, `browser`, `exec`, `keep`, `gc`, `fila` (uma vaga pesada de 3D/vídeo por vez), … |
 | `agent-bench-mcp` | Um MCP stdio para todos os harnesses: `bench_ensure`, `bench_cdp`, CUA com `bench=` |
 | Workspaces **6–11** | Persistentes para os viewers. Nunca 12+ (o Hyprland abre esse número no monitor focado) |
 | Workspaces **1–5** | Sessão humana. `hyprctl -j` só leitura. Sem grim, ydotool ou computer-use aí |
 | Skills | Agent Skills: convivência, operação da bancada, receita de login persistente |
 
-Um Xvnc vazio é barato (~80–140 MiB, ~0,3 s). O custo é o Chromium. Bancadas sobem sob demanda. Após 3 h sem comandos (padrão), o encerramento automático exige ausência de páginas de trabalho e apenas infraestrutura reconhecida; aplicativos nativos e estado incerto preservam a bancada (`padrao` e controle humano também ficam). O perfil sobrevive ao `stop`; `agent-bench keep NOME` grava `.keep` para o GC de disco não apagar o login. Veja [retenção de sessões](docs/session-retention.md).
+Um Xvnc vazio é barato (~80–140 MiB, ~0,3 s). O custo é o Chromium. Bancadas sobem sob demanda. Após 25 min sem comandos de agente, o encerramento automático para a bancada, a menos que haja um cliente CDP conectado ou processo nativo gastando CPU de verdade; abas esquecidas e apps Electron parados não seguram mais a bancada (`padrao` e controle humano ficam). O perfil sobrevive ao `stop`; `agent-bench keep NOME` grava `.keep` para o GC de disco não apagar o login. Veja [retenção de sessões](docs/session-retention.md).
 
 ## Uso
 

@@ -135,6 +135,11 @@ systemd = home / '.config/systemd/user'
 systemd.mkdir(parents=True, exist_ok=True)
 for unit in ('agent-bench@.service', 'agent-bench-views.service'):
     shutil.copy2(prefix / 'contrib/systemd' / unit, systemd / unit)
+# CPU limits for the heavy-work queue (agent-bench fila): 1.5 cores per bench, 8 for all.
+for dropin in sorted((prefix / 'contrib/systemd').glob('*.d')):
+    (systemd / dropin.name).mkdir(exist_ok=True)
+    for conf in dropin.glob('*.conf'):
+        shutil.copy2(conf, systemd / dropin.name / conf.name)
 
 if reload_hypr:
     hypr = home / '.config/hypr'

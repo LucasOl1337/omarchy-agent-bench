@@ -225,6 +225,19 @@ No desktop da bancada: F1 abre a central, Super+Enter abre o terminal, Alt+Tab a
 
 O catálogo detecta os executáveis disponíveis na máquina. Ferramentas gráficas devem ser lançadas por `agent-bench`; o catálogo não autoriza conectar um cliente ao navegador pessoal. `doctor` informa conexão ao display, workspace reservado, controle humano, ferramentas essenciais e endpoint CDP exclusivo. Navegador fechado é informado separadamente de falha do desktop.
 
+## Fila pesada (3D, vídeo, captura longa)
+
+Render WebGL/3D, vídeo e gravação rodam em CPU (as bancadas não têm GPU no Xvnc), então só uma bancada por vez segura a vaga pesada. Fora da vaga a bancada fica com 1,5 núcleo (`agent-bench@.service.d/10-cota.conf`); as bancadas juntas não passam de 8 núcleos (`app-agent-bench.slice`).
+
+```bash
+agent-bench fila                                  # quem tem a vaga e quem espera
+agent-bench fila NOME rodar -- node captura.mjs   # segura a vaga só enquanto o comando roda
+agent-bench fila NOME entrar "render SOMPO agro"  # bloqueia até a vaga; chamar de novo renova
+agent-bench fila NOME sair                        # libera pro próximo
+```
+
+A vaga vence em 20 min sem renovação ou quando a bancada fecha. Frentes pesadas em paralelo entram em sequência. Terminou de medir, feche a aba 3D ou leve pra `about:blank` antes de sair.
+
 ## Higiene das abas e bancadas
 
 Ao concluir uma pesquisa, descartar uma oportunidade ou salvar o comprovante de uma ação, feche as abas próprias que não têm próxima ação. Reutilize a aba de pesquisa e a aba já aberta para a mesma URL. Não deixe buscas, duplicatas ou páginas concluídas acumularem entre rodadas.

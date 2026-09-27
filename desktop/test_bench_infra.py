@@ -155,7 +155,7 @@ for line in sys.stdin:
         self.processes = []
         self.stopped = []
         self.modes = {}
-        self.pool = CuaPool(init_timeout=.12, call_timeout=.12)
+        self.pool = CuaPool(init_timeout=.4, call_timeout=.4)
         for target, value in [('ensure', lambda *a, **k: {'env': {}}),
                               ('launch_cua', self.launch), ('stop_cua', self.stop)]:
             patcher = patch('bench_hub_mcp.' + target, side_effect=value)

@@ -33,7 +33,7 @@ ownership](task-ownership.md).
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `AGENT_BENCH_OWNER` | inferred harness | Actor label in `owner.json`; later callers update `last_actor`, not the stable label |
-| `AGENT_BENCH_IDLE_SECONDS` | `10800` | Minimum idle time; work pages, native processes or uncertain state prevent reaping |
+| `AGENT_BENCH_IDLE_SECONDS` | `1500` | Minimum time without agent commands; a connected CDP client or native CPU work prevents reaping |
 | `AGENT_BENCH_GC_DAYS` | `30` | Disk GC age |
 | `AGENT_BENCH_PREFIX` | `~/.local/share/omarchy-agent-bench` | Install / uninstall |
 

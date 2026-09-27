@@ -12,7 +12,7 @@ It is isolation of **display and input**, not a security sandbox. The agent stil
 
 | Piece | Role |
 | --- | --- |
-| `agent-bench` | CLI: `ensure`, `cdp`, `browser`, `exec`, `keep`, `gc`, … |
+| `agent-bench` | CLI: `ensure`, `cdp`, `browser`, `exec`, `keep`, `gc`, `fila` (one heavy 3D/video slot at a time), … |
 | `agent-bench-mcp` | One stdio MCP for every harness: `bench_ensure`, `bench_cdp`, CUA with `bench=` |
 | `agent-bench-web` / `bench_web` | Browser accessibility snapshots, element refs, Unicode fill and tab ownership; CLI and MCP, no browser extension |
 | `agent-bench-profile` | Prepare a bench's initial persistent profile from the offline agent seed; dry-run by default |
@@ -20,7 +20,7 @@ It is isolation of **display and input**, not a security sandbox. The agent stil
 | Workspaces **1–5** | Human session. Read-only `hyprctl -j` is fine. No grim, ydotool, or computer-use there |
 | Skills | Drop-in Agent Skills: coexistence, bench operations, persistent-login recipe |
 
-An empty Xvnc is cheap (~80–140 MiB, ~0.3 s). The cost is Chromium. Benches start on demand. After 3 hours without commands, the reaper requires no work pages and only recognized infrastructure; native applications and uncertain state preserve the bench (`padrao` and human-control also stay). Chromium profiles survive `stop`; `agent-bench keep NAME` writes `.keep` so disk GC leaves logins alone. See [session retention](docs/session-retention.md).
+An empty Xvnc is cheap (~80–140 MiB, ~0.3 s). The cost is Chromium. Benches start on demand. After 25 minutes without agent commands, the reaper stops a bench unless a CDP client is connected or native processes are doing real CPU work; leftover tabs and idle Electron apps no longer pin it (`padrao` and human-control stay). Chromium profiles survive `stop`; `agent-bench keep NAME` writes `.keep` so disk GC leaves logins alone. See [session retention](docs/session-retention.md).
 
 ```mermaid
 flowchart LR
