@@ -1,4 +1,5 @@
 import unittest
+import base64
 import copy
 import io
 import json
@@ -1086,6 +1087,53 @@ class FrameCDP(FakeCDP):
             return self.hit
         return result
 
+
+class ScreenshotClipCDP(FakeCDP):
+    border = [10, 20, 410, 20, 410, 320, 10, 320]
+
+    def call(self, method, params=None, session=None):
+        result = super().call(method, params, session)
+        if method == 'DOM.getBoxModel':
+            return {'model': {'border': self.border}}
+        if method == 'Page.getLayoutMetrics':
+            return {'cssVisualViewport': {'pageX': 0, 'pageY': 500, 'clientWidth': 300, 'clientHeight': 800}}
+        if method == 'Page.captureScreenshot':
+            return {'data': base64.b64encode(b'\x89PNG\r\n\x1a\n').decode()}
+        return result
+
+class ScreenshotClipTests(unittest.TestCase):
+    def setUp(self):
+        self.cdp = ScreenshotClipCDP()
+        self.state = {'tabs': {'owned': {}}}
+        self.dir = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def shot(self, name, **args):
+        return web.operate(self.cdp, self.state, lambda: None,
+                           {'action': 'screenshot', 'tab': 'owned', 'output': str(Path(self.dir.name) / name), **args})
+
+    def capture_params(self):
+        return [p for m, p in self.cdp.calls if m == 'Page.captureScreenshot'][-1]
+
+    def test_without_ref_captures_viewport_unchanged(self):
+        result = self.shot('full.png')
+        self.assertEqual(self.capture_params(), {'format': 'png', 'captureBeyondViewport': False})
+        self.assertNotIn('clip', result)
+
+    def test_ref_clips_to_visible_part_of_observed_node(self):
+        region = next(i for i in web.operate(self.cdp, self.state, lambda: None,
+                      {'action': 'observe', 'tab': 'owned'})['items'] if i['role'] == 'region')
+        result = self.shot('region.png', ref=region['ref'])
+        clip = {'x': 10, 'y': 520, 'width': 290, 'height': 300, 'scale': 1}
+        self.assertEqual(self.capture_params()['clip'], clip)
+        self.assertEqual(result['clip'], clip)
+
+    def test_stale_ref_is_refused_before_capture(self):
+        with self.assertRaisesRegex(web.WebError, 'stale_ref'):
+            self.shot('stale.png', ref='nope')
+        self.assertFalse(any(m == 'Page.captureScreenshot' for m, _ in self.cdp.calls))
 
 if __name__ == '__main__':
     unittest.main()

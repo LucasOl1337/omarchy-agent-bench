@@ -66,7 +66,7 @@ WEB_TOOL = {
             'text_limit': {'type': 'integer', 'minimum': 1, 'maximum': 10000},
             'offset': {'type': 'integer', 'minimum': 0},
             'limit': {'type': 'integer', 'minimum': 1, 'maximum': 1000},
-            'output': {'type': 'string', 'description': 'New absolute PNG path for screenshot.'}},
+            'output': {'type': 'string', 'description': 'New absolute PNG path for screenshot. With ref, the screenshot is clipped to that observed node (visible part).'}},
         'required': ['bench', 'mission', 'action']}}
 
 
@@ -765,10 +765,31 @@ def operate(cdp, state, save, args):
         output = Path(args['output'])
         if not output.is_absolute():
             raise WebError('output_invalid: use a new absolute PNG path')
-        image = call('Page.captureScreenshot', {'format': 'png', 'captureBeyondViewport': False})
+        params = {'format': 'png', 'captureBeyondViewport': False}
+        if args.get('ref'):
+            # Optional clip to an observed node's border box (page coordinates).
+            # Without ref the capture is the viewport, exactly as before.
+            node = resolve_ref(record, args['ref'], tree)
+            if not node.get('backend'):
+                raise WebError('not_visible: this ref has no DOM node to clip')
+            call('DOM.scrollIntoViewIfNeeded', {'backendNodeId': node['backend']})
+            border = call('DOM.getBoxModel', {'backendNodeId': node['backend']}).get('model', {}).get('border') or []
+            if len(border) != 8:
+                raise WebError('not_visible: observe or use a full screenshot')
+            xs, ys = border[::2], border[1::2]
+            metrics = call('Page.getLayoutMetrics')
+            visual = metrics.get('cssVisualViewport', {})
+            page_x, page_y = visual.get('pageX', 0), visual.get('pageY', 0)
+            width = min(max(xs), visual.get('clientWidth', max(xs))) - max(min(xs), 0)
+            height = min(max(ys), visual.get('clientHeight', max(ys))) - max(min(ys), 0)
+            if width < 2 or height < 2:
+                raise WebError('not_visible: the node is outside the viewport')
+            params['clip'] = {'x': max(min(xs), 0) + page_x, 'y': max(min(ys), 0) + page_y,
+                              'width': width, 'height': height, 'scale': 1}
+        image = call('Page.captureScreenshot', params)
         with output.open('xb') as file:
             file.write(base64.b64decode(image['data']))
-        return {'tab': tab, 'path': str(output)}
+        return {'tab': tab, 'path': str(output), **({'clip': params['clip']} if 'clip' in params else {})}
     node = None
     if action in ('click', 'fill', 'upload'):
         node = resolve_ref(record, args.get('ref'), tree)
