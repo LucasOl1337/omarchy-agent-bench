@@ -907,7 +907,7 @@ def native_job_present(name):
     """Keep even a sleeping native job or an inventory we cannot read."""
     try:
         return bool(_native_cpu_ticks(name))
-    except (OSError, ValueError, RuntimeError, KeyError, IndexError):
+    except (OSError, ValueError, RuntimeError, KeyError, IndexError, TypeError):
         return True
 
 
@@ -1057,7 +1057,7 @@ def reap_idle():
         name = sock.parent.name
         try:
             sample_cpu(name)
-        except (OSError, ValueError, RuntimeError, KeyError) as exc:
+        except (OSError, ValueError, RuntimeError, KeyError, IndexError, TypeError) as exc:
             _cpu_samples.pop(name, None)
             print('agent-bench reap cpu:', name, exc, flush=True)
         try:

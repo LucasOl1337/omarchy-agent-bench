@@ -203,6 +203,21 @@ class Reaper(unittest.TestCase):
                 self.assertEqual(['job'], ops.reap_idle())
                 decision.assert_called_once_with('job', check_input=False)
 
+    def test_uncertain_cpu_inventory_does_not_block_other_benches(self):
+        with tempfile.TemporaryDirectory() as folder:
+            runtime = Path(folder)
+            for name in ('uncertain', 'idle'):
+                (runtime / name).mkdir(); (runtime / name / 'control.sock').touch()
+            def sampled(name):
+                if name == 'uncertain':
+                    raise IndexError('inventário incompleto')
+            with patch.object(ops, 'RUNTIME', runtime), \
+                 patch.object(ops, 'sample_cpu', side_effect=sampled), \
+                 patch.object(ops, 'should_reap', side_effect=lambda name, **kw: name == 'idle'), \
+                 patch.object(ops, 'stop') as stopped:
+                self.assertEqual(['idle'], ops.reap_idle())
+                stopped.assert_called_once_with('idle', preserve_profile=True)
+
     def test_padrao_is_not_pinned(self):
         self.assertNotIn('padrao', ops.NEVER_REAP)
 
