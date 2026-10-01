@@ -19,7 +19,7 @@ from bench_control import RUNTIME, views, control
 
 BASE = Path(__file__).resolve().parent.parent
 STATE = BASE / 'desktop/sessions'
-IDLE_SECONDS = int(os.environ.get('AGENT_BENCH_IDLE_SECONDS', str(25 * 60)))
+IDLE_SECONDS = int(os.environ.get('AGENT_BENCH_IDLE_SECONDS', str(15 * 60)))
 # A bench that burned more CPU than this in the window is still working (a game,
 # a render, a long script) even without agent commands: about 3% of one core.
 IDLE_CPU_SECONDS = float(os.environ.get('AGENT_BENCH_IDLE_CPU_SECONDS', '20'))
@@ -65,9 +65,17 @@ def bench_service(name):
     return f'agent-bench@{valid(name)}.service'
 
 
-def stop(name):
-    return subprocess.run(['systemctl', '--user', 'stop', bench_service(name)],
-                          env=systemd_env(), check=True)
+def stop(name, preserve_profile=False):
+    runtime, _ = paths(name)
+    marker = runtime / 'preserve-profile-on-stop'
+    if preserve_profile:
+        marker.touch()
+    try:
+        return subprocess.run(['systemctl', '--user', 'stop', bench_service(name)],
+                              env=systemd_env(), check=True)
+    finally:
+        if preserve_profile:
+            marker.unlink(missing_ok=True)
 
 
 def launch_cua(name, env):
@@ -878,13 +886,38 @@ def native_work_snapshot(name):
         return {'status': 'unknown', 'reason': 'inventário nativo não confirmado', 'processes': []}
 
 
-def should_reap(name, now=None):
+def heavy_work_active(name, now=None):
+    """A renewed heavy-work slot or waiting job is activity, even with no CDP."""
+    from bench_fila import FILE, TTL, ESPERA_TTL
+    now = time.time() if now is None else now
+    try:
+        state = json.loads(FILE.read_text())
+        for key, stamp, ttl in (('vagas', 'renovado', TTL), ('espera', 'visto', ESPERA_TTL)):
+            if any(row.get('bench') == name and now - float(row[stamp]) <= ttl
+                   for row in state.get(key, [])):
+                return True
+        return False
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return True  # An unreadable lease is uncertainty, not an idle bench.
+
+
+def native_job_present(name):
+    """Keep even a sleeping native job or an inventory we cannot read."""
+    try:
+        return bool(_native_cpu_ticks(name))
+    except (OSError, ValueError, RuntimeError, KeyError, IndexError):
+        return True
+
+
+def should_reap(name, now=None, check_input=True):
     if name in NEVER_REAP:
         return False
     if (RUNTIME / name / 'human-control').exists():
         return False
     lock = RUNTIME / name / 'input.lock'
-    if lock.exists():
+    if check_input and lock.exists():
         import fcntl
         with lock.open('a') as handle:
             try:
@@ -896,9 +929,13 @@ def should_reap(name, now=None):
     now = time.time() if now is None else now
     if seen is None or now - seen < IDLE_SECONDS:
         return False
-    # Leftover tabs and apps no longer pin a bench: only a connected CDP client
-    # or real CPU work counts as use once the agent stopped sending commands.
     if cdp_client_connected(name):
+        return False
+    if heavy_work_active(name, now):
+        return False
+    # A terminal, editor or windowless job may be waiting on I/O with little
+    # CPU usage. Keep it while present; neither a PID nor a tab proves it saved.
+    if native_job_present(name):
         return False
     return not bench_cpu_busy(name)
 
@@ -927,7 +964,7 @@ def _native_cpu_ticks(name):
             comm = (proc / 'comm').read_text().strip()
             command = b' '.join(_process_args(proc))
             fields = (proc / 'stat').read_text().rsplit(')', 1)[1].split()
-        except (OSError, IndexError):
+        except FileNotFoundError:
             continue
         if comm in BENCH_INFRA or b'bin/agent-bench' in command or b'desktop/welcome.py' in command:
             continue
@@ -947,6 +984,8 @@ def bench_cpu_busy(name, now=None):
     """Busy unless the reaper watched a full window of little native CPU use."""
     now = time.monotonic() if now is None else now
     samples = _cpu_samples.get(name) or []
+    if samples and not samples[-1][1]:
+        return False  # No native job exists; infrastructure needs no warm-up.
     old = [s for s in samples if now - s[0] >= IDLE_CPU_WINDOW]
     if not old:
         return True
@@ -982,7 +1021,8 @@ def close_browser(name, timeout=10):
 
     A SIGTERM lets Chromium flush cookies and exit cleanly; dying with its X
     server lost recent cookies and marked every profile as crashed. Ephemeral
-    profiles are deleted afterwards.
+    profiles are deleted afterwards only for explicit stops. The idle reaper
+    marks its stop to preserve every profile and leaves deletion to disk GC.
     """
     _, state = paths(name)
     profile = state / 'chromium'
@@ -1004,7 +1044,8 @@ def close_browser(name, timeout=10):
                 break
             time.sleep(.1)
     removed = False
-    if (profile / EPHEMERAL_MARK).exists() and not _main_chromium_pids(profile):
+    preserve = (RUNTIME / name / 'preserve-profile-on-stop').exists()
+    if not preserve and (profile / EPHEMERAL_MARK).exists() and not _main_chromium_pids(profile):
         shutil.rmtree(profile, ignore_errors=True)
         removed = True
     return {'closed': bool(owner), 'profile_removed': removed}
@@ -1020,10 +1061,17 @@ def reap_idle():
             _cpu_samples.pop(name, None)
             print('agent-bench reap cpu:', name, exc, flush=True)
         try:
-            if not should_reap(name):
-                continue
-            stop(name)
-            stopped.append(name)
+            # Hold the same input lease through the final check and stop so a
+            # new agent command cannot begin after we observed an idle bench.
+            with (sock.parent / 'input.lock').open('a') as lock:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    continue
+                if not should_reap(name, check_input=False):
+                    continue
+                stop(name, preserve_profile=True)
+                stopped.append(name)
         except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
             print('agent-bench reap:', name, exc, flush=True)
     return stopped

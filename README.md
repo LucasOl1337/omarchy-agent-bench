@@ -20,7 +20,7 @@ It is isolation of **display and input**, not a security sandbox. The agent stil
 | Workspaces **1–5** | Human session. Read-only `hyprctl -j` is fine. No grim, ydotool, or computer-use there |
 | Skills | Drop-in Agent Skills: coexistence, bench operations, persistent-login recipe |
 
-An empty Xvnc is cheap (~80–140 MiB, ~0.3 s). The cost is Chromium. Benches start on demand. After 25 minutes without agent commands, the reaper stops a bench unless a CDP client is connected or native processes are doing real CPU work; leftover tabs and idle Electron apps no longer pin it (`padrao` and human-control stay). Chromium profiles survive `stop`; `agent-bench keep NAME` writes `.keep` so disk GC leaves logins alone. See [session retention](docs/session-retention.md).
+An empty Xvnc is cheap (~80–140 MiB, ~0.3 s). The cost is Chromium. Benches start on demand. After 15 minutes without agent commands, the reaper stops a bench unless the human is controlling it, an input operation or CDP client is active, a native job remains, or a heavy-work lease is valid. Leftover tabs and idle Electron apps do not pin it. Automatic stops preserve every Chromium profile; `agent-bench keep NAME` writes `.keep` so disk GC leaves logins alone. See [session retention](docs/session-retention.md).
 
 ```mermaid
 flowchart LR

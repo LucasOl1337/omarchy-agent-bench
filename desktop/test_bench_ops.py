@@ -129,6 +129,80 @@ class ConcurrentLaunch(unittest.TestCase):
 
 
 class Reaper(unittest.TestCase):
+    def setUp(self):
+        # A unit fixture has no real bench or heavy-work queue to inspect.
+        self.native_guard = ops.native_job_present
+        self.heavy_guard = ops.heavy_work_active
+        native = patch.object(ops, 'native_job_present', return_value=False)
+        heavy = patch.object(ops, 'heavy_work_active', return_value=False)
+        native.start(); heavy.start()
+        self.addCleanup(native.stop); self.addCleanup(heavy.stop)
+
+    def test_deadline_is_fifteen_minutes(self):
+        self.assertEqual(900, ops.IDLE_SECONDS)
+        with patch.object(ops, 'RUNTIME', Path('/tmp/no-runtime')), \
+             patch.object(ops, 'last_activity', return_value=1), \
+             patch.object(ops, 'cdp_client_connected', return_value=False), \
+             patch.object(ops, 'bench_cpu_busy', return_value=False):
+            self.assertFalse(ops.should_reap('job', now=900))
+            self.assertTrue(ops.should_reap('job', now=902))
+
+    def test_sleeping_native_job_or_heavy_lease_prevents_stop(self):
+        with patch.object(ops, 'RUNTIME', Path('/tmp/no-runtime')), \
+             patch.object(ops, 'last_activity', return_value=1), \
+             patch.object(ops, 'cdp_client_connected', return_value=False), \
+             patch.object(ops, 'bench_cpu_busy', return_value=False):
+            for guard in ('native_job_present', 'heavy_work_active'):
+                with self.subTest(guard=guard), patch.object(ops, guard, return_value=True):
+                    self.assertFalse(ops.should_reap('job', now=2000))
+
+    def test_empty_native_inventory_needs_no_cpu_warmup(self):
+        with patch.dict(ops._cpu_samples, clear=True):
+            ops._cpu_samples['job'] = [(10, {})]
+            self.assertFalse(ops.bench_cpu_busy('job', now=10))
+
+    def test_zero_cpu_native_process_and_uncertain_inventory_are_retained(self):
+        with patch.object(ops, '_native_cpu_ticks', return_value={77: 0}):
+            self.assertTrue(self.native_guard('job'))
+        with patch.object(ops, '_native_cpu_ticks', side_effect=PermissionError()):
+            self.assertTrue(self.native_guard('job'))
+        with patch.object(ops, '_native_cpu_ticks', return_value={}):
+            self.assertFalse(self.native_guard('job'))
+
+    def test_heavy_work_lease_is_valid_only_until_its_ttl(self):
+        import bench_fila
+        with tempfile.TemporaryDirectory() as folder:
+            file = Path(folder) / 'fila.json'
+            file.write_text('{"vagas":[{"bench":"job","renovado":100}],"espera":[]}')
+            with patch.object(bench_fila, 'FILE', file), patch.object(bench_fila, 'TTL', 1200):
+                self.assertTrue(self.heavy_guard('job', now=1000))
+                self.assertFalse(self.heavy_guard('neighbor', now=1000))
+                self.assertFalse(self.heavy_guard('job', now=1301))
+                file.write_text('{"vagas":[],"espera":[{"bench":"job","visto":100}]}')
+                self.assertTrue(self.heavy_guard('job', now=189))
+                self.assertFalse(self.heavy_guard('job', now=191))
+                file.write_text('uncertain')
+                self.assertTrue(self.heavy_guard('job', now=2000))
+
+    def test_idle_stop_holds_input_lock_and_preserves_profile(self):
+        import fcntl
+        with tempfile.TemporaryDirectory() as folder:
+            runtime = Path(folder)
+            bench = runtime / 'job'
+            bench.mkdir(); (bench / 'control.sock').touch()
+            def stopped(name, preserve_profile=False):
+                self.assertEqual(name, 'job')
+                self.assertTrue(preserve_profile)
+                with (bench / 'input.lock').open('a') as handle:
+                    with self.assertRaises(BlockingIOError):
+                        fcntl.flock(handle, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            with patch.object(ops, 'RUNTIME', runtime), \
+                 patch.object(ops, 'sample_cpu'), \
+                 patch.object(ops, 'should_reap', return_value=True) as decision, \
+                 patch.object(ops, 'stop', side_effect=stopped):
+                self.assertEqual(['job'], ops.reap_idle())
+                decision.assert_called_once_with('job', check_input=False)
+
     def test_padrao_is_not_pinned(self):
         self.assertNotIn('padrao', ops.NEVER_REAP)
 
@@ -268,6 +342,27 @@ class Profiles(unittest.TestCase):
             self.assertFalse(scratch.exists())
             self.assertFalse(ops.close_browser('antiga')['profile_removed'])
             self.assertTrue(kept.exists())
+
+    def test_idle_stop_keeps_ephemeral_profile_and_session_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder) / 'sessions'
+            runtime = Path(folder) / 'runtime'
+            (runtime / 'job').mkdir(parents=True)
+            profile = ops.provide_bench_profile(state / 'job')
+            (profile / 'cookie-fixture').write_text('retained')
+            (state / 'job/checkpoint.json').write_text('{}')
+            def stopped(*args, **kwargs):
+                self.assertTrue((runtime / 'job/preserve-profile-on-stop').exists())
+                self.assertFalse(ops.close_browser('job')['profile_removed'])
+            with patch.object(ops, 'STATE', state), patch.object(ops, 'RUNTIME', runtime), \
+                 patch.object(ops, 'systemd_env', return_value={}), \
+                 patch.object(ops.subprocess, 'run', side_effect=stopped), \
+                 patch.object(ops, 'profile_process', return_value=None), \
+                 patch.object(ops, '_main_chromium_pids', return_value=[]):
+                ops.stop('job', preserve_profile=True)
+            self.assertEqual('retained', (profile / 'cookie-fixture').read_text())
+            self.assertTrue((state / 'job/checkpoint.json').exists())
+            self.assertFalse((runtime / 'job/preserve-profile-on-stop').exists())
 
 
 class Owner(unittest.TestCase):

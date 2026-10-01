@@ -1,85 +1,64 @@
-# Retenção de trabalho nativo
+# Encerramento por inatividade
 
-O encerramento automático por ociosidade só acontece quando as verificações
-confirmam uma sessão descartável. Tempo sem comandos não prova ausência de
-trabalho: um editor, terminal ou processo sem janela pode continuar produzindo
-ou mantendo dados em memória.
+O supervisor `agent-bench-views.service` verifica as bancadas a cada 60 s.
+O prazo padrão é **15 minutos sem comandos de agente**, inclusive nas bancadas
+com login. `AGENT_BENCH_IDLE_SECONDS` pode definir outro prazo; `bar.json`
+publica o valor efetivo em `idle_timeout_seconds`, lido pelo DailyWork.
+Abrir o painel, ler status ou observar a tela não renova a atividade.
 
 `should_reap(name)` preserva a bancada quando:
 
-- É a bancada `padrao`, o humano assumiu ou há operação protegida pela trava.
-- A atividade é recente ou seu horário não está disponível.
-- O Chromium próprio tem páginas de trabalho ou seu estado está incerto.
-- Existe aplicativo/processo nativo além da infraestrutura conhecida.
-- O inventário de processos não pôde ser confirmado.
+- O humano está no controle ou há operação protegida pela trava de entrada.
+- A atividade é recente ou o horário não está disponível.
+- Há um cliente conectado ao CDP do Chromium da bancada.
+- Há vaga pesada válida ou espera renovada na fila de trabalho pesado.
+- Há processo nativo além da infraestrutura e do navegador.
+- O inventário de processos ou a fila de trabalho pesado está indisponível.
+- As amostras de CPU ainda indicam trabalho nativo em andamento.
 
-A verificação nativa usa somente o status da bancada e leituras de `/proc` e
-cgroup v2. Confere que o PID informado é Xvnc na unidade exata
-`agent-bench@NOME.service` e inventaria essa árvore e seus subgrupos. Não consulta
-o display humano, não depende de uma janela estar visível e não renova o relógio
-de atividade apenas por observar a sessão.
+Um editor, terminal ou job esperando rede continua protegido mesmo com CPU
+baixa. A inspeção de processos usa o status da própria bancada, `/proc` e cgroup
+v2. O PID informado precisa pertencer à unidade `agent-bench@NOME.service`.
+`BENCH_INFRA` lista o navegador e auxiliares de desktop; o controlador e a
+central da bancada são reconhecidos pelo comando. Outros processos mantêm a
+bancada aberta. Sem processo nativo, não é necessário aguardar uma janela de
+amostras de CPU depois que o supervisor inicia.
 
-São considerados infraestrutura o Xvnc validado, Openbox com a configuração
-própria, controlador e central com seus caminhos/argumentos esperados, além de
-D-Bus da sessão. A árvore do Chromium é aceita apenas para o processo do perfil
-próprio e descendentes do mesmo executável; um visualizador ou editor lançado
-pelo navegador continua sendo trabalho nativo. A checagem de páginas Chromium
-acontece separadamente antes da decisão de encerrar.
+Abas largadas e interfaces Electron sem operação ativa não reservam bancada.
+Render WebGL, vídeo e captura longa usam a fila pesada; sua vaga válida impede
+que uma operação em curso seja confundida com uma aba esquecida. A vaga segue
+seu TTL próprio e precisa ser renovada conforme o guia.
 
-A identidade do executável vem de `/proc/PID/exe`, comparando device/inode entre
-o Chromium próprio e seus descendentes. `argv[0]` pode ser reescrito pelo Chromium
-e não identifica o binário. Outro executável descendente, mesmo chamado chromium,
-continua sendo trabalho nativo. O diagnóstico usa apenas o basename do alvo de
-`exe`, nunca `argv[0]` ou os argumentos. Os argumentos ainda são consultados
-internamente para reconhecer a infraestrutura já listada, sem expô-los.
+O reaper segura `input.lock` exclusivamente desde a checagem final até o stop.
+Um novo comando protegido do agente não começa nesse intervalo. O controle
+humano, CDP e a atividade são reconferidos sob essa trava.
 
-Qualquer outro processo preserva a bancada. Isso inclui editores e terminais
-minimizados, jobs sem janela, auxiliares ainda não reconhecidos e comandos cujo
-papel não está claro. Erros de acesso, PID desaparecido, origem estrangeira ou
-inventário que muda durante a leitura retornam estado `unknown`, que também
-preserva. Os diagnósticos retornam PID e nome do executável; não expõem argumentos
-que possam conter dados da tarefa.
-O inventário também reconfere starttime, executável, parentesco, argumentos e
-pertencimento à bancada antes de concluir; divergência, `exe` ausente/inacessível
-ou executável removido resulta em `unknown`. Essa correção não reconhece novos
-serviços como infraestrutura.
+## Perfis e trabalho salvo
 
-`.keep` continua significando retenção do perfil em disco contra o GC. Não
-impede, por si só, o encerramento de uma sessão comprovadamente ociosa. Para
-encerrar trabalho terminado, o proprietário continua usando `agent-bench stop`.
+O encerramento automático marca `preserve-profile-on-stop` no runtime e chama
+o stop existente. O Chromium recebe SIGTERM antes do Xvnc pra gravar cookies.
+Todos os perfis permanecem em disco, inclusive os marcados como efêmeros;
+checkpoints, arquivos salvos e `.keep` também permanecem. A marca temporária é
+removida ao terminar a parada.
 
-## Limites
+`.keep` protege o perfil contra GC de disco, mas não mantém uma bancada ociosa
+aberta. O GC continua separado, com prévia e aplicação explícita. Uma parada
+manual conserva seu comportamento anterior de apagar perfil efêmero, enquanto
+o perfil persistente fica guardado. Não houve alteração do login ou cópia de
+cookies entre bancadas.
 
-Nenhuma heurística prova que o estado de um aplicativo foi salvo. Esta regra
-prefere manter sessões incertas e pode reter uma bancada por causa de um auxiliar
-inofensivo. Não existe detecção automática de buffers modificados nem dedução de
-que um terminal parado esteja livre de trabalho. A central padrão é considerada
-infraestrutura descartável; seus controles de teste não viram documentos com
-persistência garantida.
+## Limites e verificação
 
-Auxiliares AT-SPI (`at-spi-bus-launcher`, `at-spi2-registryd` e seu D-Bus) e
-crash handlers independentes ainda não têm identidade/argumentos validados pela
-lista. Sua presença conserva a sessão. Ampliar essa lista exige uma evidência
-própria de caminho, argumentos e pertencimento; nomes de executável isolados não
-são suficientes para descartar processos.
+Nenhuma heurística comprova que um documento foi salvo. Jobs fora do cgroup,
+clientes antigos sem trava e conteúdo pendente em uma interface Electron não
+são totalmente detectáveis. Trabalho que precisa permanecer em curso usa as
+rotas protegidas e, quando pesado, a fila com vaga renovada.
 
-A inspeção é uma fotografia. Há uma janela entre a leitura e o stop; esta mudança
-não introduz lease, exclusividade nova ou transação com o lançamento de apps.
-Trabalho movido para fora do cgroup da bancada também fica fora do inventário.
-MCPs com código antigo e processos de reaper já carregados precisam adotar a
-versão atual antes de receber esse comportamento.
+O supervisor já iniciado precisa carregar o código atualizado. Reiniciar
+somente `agent-bench-views.service` preserva os desktops e as atribuições de
+workspace, mas recria seus viewers; não reinicie bancadas de outras tarefas.
 
-## Verificação sem GUI
-
-```sh
-python -m unittest discover -s desktop -p 'test_bench_ops.py' -v
-python -m unittest discover -s desktop -p 'test_*.py'
-```
-
-As fixtures criam árvores temporárias de `/proc` e cgroups; não iniciam aplicativos
-nem encerram serviços. Cobrem central vazia, Chromium próprio e vazio, editor,
-terminal, job sem janela, processo em subgrupo, aplicativo filho do Chromium,
-vizinho não consultado, erro e mudança de inventário, CDP incerto e a distinção
-entre idle-stop e `.keep`. Também cobrem `argv[0]` reescrito, ausência de argumentos
-no diagnóstico, mesmo inode com outro nome, executável diferente com nome igual,
-troca de PID/binário e manutenção de auxiliares AT-SPI/portal/gvfs/crashpad como busy.
+As verificações existentes em `test_bench_ops.py` cobrem o limite de 900 s,
+CDP e atividade recente, jobs com CPU zero, fila válida e expirada, inventário
+incerto, trava mantida durante o stop e retenção de perfil/checkpoint. As
+fixtures são temporárias, sem parar serviços reais nem consultar tela humana.
