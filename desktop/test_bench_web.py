@@ -1135,5 +1135,63 @@ class ScreenshotClipTests(unittest.TestCase):
             self.shot('stale.png', ref='nope')
         self.assertFalse(any(m == 'Page.captureScreenshot' for m, _ in self.cdp.calls))
 
+
+class TabQuotaTests(unittest.TestCase):
+    """Open counts live agent tabs of every mission on the same browser (cap 12)."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.missions = Path(self.dir.name) / 'web-missions'
+        self.missions.mkdir()
+        self.cdp = FakeCDP()
+        self.cdp.close = lambda: None
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def store(self, mission, tabs, browser='ws://browser'):
+        (self.missions / f'{mission}.json').write_text(json.dumps({'browser': browser, 'tabs': {t: {} for t in tabs}}))
+
+    def live(self, *targets):
+        self.cdp.targets = [page(t) for t in targets]
+
+    def open(self):
+        with patch.object(web, 'request'), patch.object(web, 'control', return_value=nullcontext()), \
+                patch.object(web, 'views', return_value={'workspace': 6}), patch.object(web, 'validate_location'), \
+                patch.object(web, 'bench_browser_snapshot', return_value={'webSocketDebuggerUrl': 'ws://browser'}), \
+                patch.object(web, 'paths', return_value=(None, Path(self.dir.name))), \
+                patch.object(web, 'CDP', return_value=self.cdp), patch.object(web, 'operate', return_value={'tab': 'new'}) as op:
+            result = web.run({'bench': 'demo', 'mission': 'mine', 'action': 'open', 'url': 'https://example.org/'})
+            return result, op
+
+    def test_refuses_open_at_twelve_live_tabs_across_missions(self):
+        tabs = [f't{i}' for i in range(12)]
+        self.live(*tabs)
+        self.store('other-a', tabs[:7])
+        self.store('mine', tabs[7:])
+        with self.assertRaisesRegex(web.WebError, 'tab_quota: 12'):
+            self.open()
+        self.assertFalse(any(m == 'Target.createTarget' for m, _ in self.cdp.calls))
+
+    def test_closed_tabs_and_other_browsers_do_not_count(self):
+        self.live(*[f't{i}' for i in range(5)])
+        self.store('stale', [f'gone{i}' for i in range(20)])
+        self.store('elsewhere', [f't{i}' for i in range(5)] + [f'x{i}' for i in range(10)], browser='ws://other')
+        self.store('other-a', ['t0', 't1'])
+        result, op = self.open()
+        self.assertEqual(result, {'tab': 'new'})
+        op.assert_called_once()
+
+    def test_only_open_is_gated(self):
+        tabs = [f't{i}' for i in range(12)]
+        self.live(*tabs)
+        self.store('other-a', tabs)
+        with patch.object(web, 'request'), patch.object(web, 'control', return_value=nullcontext()), \
+                patch.object(web, 'views', return_value={'workspace': 6}), patch.object(web, 'validate_location'), \
+                patch.object(web, 'bench_browser_snapshot', return_value={'webSocketDebuggerUrl': 'ws://browser'}), \
+                patch.object(web, 'paths', return_value=(None, Path(self.dir.name))), \
+                patch.object(web, 'CDP', return_value=self.cdp), patch.object(web, 'operate', return_value={'tabs': []}):
+            self.assertEqual(web.run({'bench': 'demo', 'mission': 'mine', 'action': 'tabs'}), {'tabs': []})
+
 if __name__ == '__main__':
     unittest.main()

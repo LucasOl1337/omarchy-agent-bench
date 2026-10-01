@@ -31,6 +31,10 @@ KEYS = {'Enter': ('Enter', 13), 'Tab': ('Tab', 9), 'Escape': ('Escape', 27),
         'Home': ('Home', 36), 'End': ('End', 35), 'Space': ('Space', 32)}
 ACTIONS = ['open', 'tabs', 'popups', 'adopt', 'frames', 'observe', 'read', 'click', 'fill', 'upload', 'key', 'scroll',
            'navigate', 'screenshot', 'close']
+# Shared logged-in Chromiums (dailywork-campanhas, cofre) hold at most this many
+# live agent tabs, summed over every mission of the same browser (owner rule,
+# 29/09/2026). Open refuses beyond it instead of growing the window.
+MAX_AGENT_TABS = 12
 WEB_TOOL = {
     'name': 'bench_web',
     'description': ('Browser by mission inside an existing agent bench. Open registers an owned tab; '
@@ -699,9 +703,32 @@ def run(args):
         cdp = CDP(snap['webSocketDebuggerUrl'])
         try:
             with mission_store(bench, mission, snap['webSocketDebuggerUrl']) as (state, save):
+                if action == 'open':
+                    live = index_targets(cdp.call('Target.getTargets')['targetInfos'])
+                    used = agent_tabs(bench, mission, snap['webSocketDebuggerUrl'], live) | {t for t in state['tabs'] if t in live}
+                    if len(used) >= MAX_AGENT_TABS:
+                        raise WebError(f'tab_quota: {len(used)} agent tabs already live in this browser '
+                                       f'(limit {MAX_AGENT_TABS}); close a finished tab of yours or checkpoint the next step')
                 return operate(cdp, state, save, args)
         finally:
             cdp.close()
+
+
+def agent_tabs(bench, mission, identity, live):
+    """Live tabs owned by the other missions of this same browser (read under web.lock)."""
+    directory = paths(bench)[1] / 'web-missions'
+    own = valid(mission) + '.json'
+    used = set()
+    for path in directory.glob('*.json'):
+        if path.name == own:
+            continue
+        try:
+            other = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if other.get('browser') == identity:
+            used.update(t for t in other.get('tabs', {}) if t in live)
+    return used
 
 
 def operate(cdp, state, save, args):
