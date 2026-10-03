@@ -164,6 +164,10 @@ if install_skills:
         for name in ('human-agent-coexistence', 'agent-bench', 'named-login-bench'):
             dst = hub / name
             src = prefix / 'skills' / name
+            if dst.is_symlink() and not dst.resolve().is_relative_to(prefix):
+                # Another repo owns this hub entry (e.g. a personal skills collection).
+                print(f'Keeping {dst} -> {dst.resolve()}')
+                continue
             if dst.exists() or dst.is_symlink():
                 backup = hub / f'{name}.bak.{time.time_ns()}'
                 dst.rename(backup)
