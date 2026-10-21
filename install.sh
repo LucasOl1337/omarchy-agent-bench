@@ -121,7 +121,7 @@ for name in ('bin', 'desktop', 'contrib', 'skills', 'docs'):
 
 bindir = home / '.local/bin'
 bindir.mkdir(parents=True, exist_ok=True)
-for name in ('agent-bench', 'agent-bench-mcp', 'agent-bench-web', 'agent-bench-profile', 'agent-bench-native'):
+for name in ('agent-bench', 'agent-bench-mcp', 'agent-bench-web', 'agent-bench-profile', 'agent-bench-native', 'fila-promotor'):
     target = bindir / name
     if target.is_symlink() or target.exists():
         target.unlink()
@@ -133,9 +133,9 @@ shutil.copy2(prefix / 'contrib/applications/agent-bench.desktop', apps / 'agent-
 
 systemd = home / '.config/systemd/user'
 systemd.mkdir(parents=True, exist_ok=True)
-for unit in ('agent-bench@.service', 'agent-bench-views.service'):
+for unit in ('agent-bench@.service', 'agent-bench-views.service', 'fila-promotor.service'):
     shutil.copy2(prefix / 'contrib/systemd' / unit, systemd / unit)
-# CPU limits for the heavy-work queue (agent-bench fila): 1.5 cores per bench, 8 for all.
+# CPU limits for the heavy-work queue (agent-bench fila): 3 cores per bench, 12 for all (Lucas, 2026-10-20).
 for dropin in sorted((prefix / 'contrib/systemd').glob('*.d')):
     (systemd / dropin.name).mkdir(exist_ok=True)
     for conf in dropin.glob('*.conf'):
@@ -187,8 +187,9 @@ fi
 if [[ "$enable_services" -eq 1 ]]; then
   systemctl --user daemon-reload
   systemctl --user enable --now agent-bench-views.service
+  systemctl --user enable --now fila-promotor.service
   systemctl --user enable agent-bench@padrao.service
-  echo "Enabled agent-bench-views.service and agent-bench@padrao.service (login)."
+  echo "Enabled agent-bench-views.service, fila-promotor.service and agent-bench@padrao.service (login)."
   echo "Existing benches were not restarted."
 fi
 

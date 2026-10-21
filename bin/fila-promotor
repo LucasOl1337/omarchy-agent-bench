@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Promove a espera da fila pesada (agent-bench fila) a cada 45 s: bench_fila.status() limpa vagas
+# vencidas e da vaga ao primeiro da fila quando sobra VRAM. Roda como fila-promotor.service.
+# O entrar() de quem espera so reavalia a cada 5 s dentro do proprio processo; sem este loop
+# ninguem promove quem ficou esperando depois que a VRAM voltou.
+here="$(dirname "$(readlink -f "$0")")"
+while true; do
+  /usr/bin/python3 "$here/agent-bench" fila >/dev/null 2>&1
+  sleep 45
+done

@@ -1,0 +1,15 @@
+[Unit]
+Description=agent-bench fila: promove a espera da fila pesada quando sobra VRAM (45 s)
+Documentation=file://@PREFIX@/desktop/bench_fila.py
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=@PREFIX@/bin/fila-promotor
+Restart=on-failure
+RestartSec=15
+Nice=10
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target

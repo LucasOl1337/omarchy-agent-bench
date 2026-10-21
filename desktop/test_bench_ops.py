@@ -71,6 +71,23 @@ class ChromiumFlags(unittest.TestCase):
             request.assert_not_called()
 
 
+class Extensions(unittest.TestCase):
+    def test_no_file_means_no_extension_flags(self):
+        with tempfile.TemporaryDirectory() as state:
+            argv = ops.chromium_argv(state, port=9300)
+            self.assertFalse(any('extension' in a.lower() for a in argv))
+
+    def test_listed_unpacked_extension_is_loaded(self):
+        with tempfile.TemporaryDirectory() as state, tempfile.TemporaryDirectory() as ext:
+            (Path(ext) / 'manifest.json').write_text('{}')
+            (Path(state) / 'extensoes').write_text(f'# comentário\n{ext}\n/nao/existe\n')
+            argv = ops.chromium_argv(state, port=9300)
+            self.assertIn('--load-extension=' + ext, argv)
+            self.assertIn('--disable-features=DisableLoadExtensionCommandLineSwitch', argv)
+            self.assertLess(argv.index('--load-extension=' + ext), argv.index('about:blank'))
+
+
+
 class Owner(unittest.TestCase):
     def test_infer_from_env(self):
         with patch.dict(os.environ, {'AGENT_BENCH_OWNER': 'cursor-test'}, clear=False):

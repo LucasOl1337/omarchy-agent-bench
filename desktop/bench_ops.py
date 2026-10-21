@@ -377,8 +377,25 @@ def chromium_argv(state, extra=None, *, port):
             '--no-default-browser-check', f'--remote-debugging-port={int(port)}',
             '--renderer-process-limit=24', '--hide-crash-restore-bubble']
     # Every process owns a distinct directory and uses its bench's isolated D-Bus.
-    return [*base, '--password-store=basic', '--profile-directory=Default',
+    return [*base, *bench_extension_args(state), '--password-store=basic', '--profile-directory=Default',
             '--user-data-dir=' + str(Path(state) / 'chromium'), *urls]
+
+
+def bench_extension_args(state):
+    """Opt-in unpacked extensions: one directory per line in <state>/extensoes.
+    Chromium 137+ ignores --load-extension unless the feature below is disabled.
+    Missing directories are skipped so a stale entry never blocks the launch."""
+    try:
+        lines = (Path(state) / 'extensoes').read_text().splitlines()
+    except OSError:
+        return []
+    dirs = [str(Path(line.strip()).expanduser()) for line in lines
+            if line.strip() and not line.lstrip().startswith('#')]
+    dirs = [d for d in dirs if ',' not in d and (Path(d) / 'manifest.json').is_file()]
+    if not dirs:
+        return []
+    return ['--disable-features=DisableLoadExtensionCommandLineSwitch',
+            '--load-extension=' + ','.join(dirs)]
 
 
 def _opener():

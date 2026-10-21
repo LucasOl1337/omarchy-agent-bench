@@ -12,7 +12,7 @@ It is isolation of **display and input**, not a security sandbox. The agent stil
 
 | Piece | Role |
 | --- | --- |
-| `agent-bench` | CLI: `ensure`, `cdp`, `browser`, `exec`, `keep`, `gc`, `fila` (one heavy 3D/video slot at a time), … |
+| `agent-bench` | CLI: `ensure`, `cdp`, `browser`, `exec`, `keep`, `gc`, `fila` (up to 2 heavy 3D/video slots, the second only with 9 GB of free VRAM), … |
 | `agent-bench-mcp` | One stdio MCP for every harness: `bench_ensure`, `bench_cdp`, CUA with `bench=` |
 | `agent-bench-web` / `bench_web` | Browser accessibility snapshots, element refs, Unicode fill and tab ownership; CLI and MCP, no browser extension |
 | `agent-bench-profile` | Prepare a bench's initial persistent profile from the offline agent seed; dry-run by default |
