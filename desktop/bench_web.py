@@ -747,7 +747,9 @@ def operate(cdp, state, save, args):
                          for t in state['tabs']], 'closed': closed}
     if action == 'open':
         url = require_url(args['url'])
-        tab = cdp.call('Target.createTarget', {'url': 'about:blank'})['targetId']
+        # Own window per mission tab: background tabs get throttled and may not paint,
+        # which breaks screenshots while other missions share this browser.
+        tab = cdp.call('Target.createTarget', {'url': 'about:blank', 'newWindow': True})['targetId']
         state['tabs'][tab] = {}
         save()  # Register before navigation, including when the navigation fails.
     else:

@@ -79,6 +79,13 @@ class WebTests(unittest.TestCase):
         self.assertIn('new', state['tabs'])
         self.assertIn({'new'}, saved)
 
+    def test_open_uses_own_window_in_shared_browser(self):
+        cdp = FakeCDP(navigation_error=True)
+        with self.assertRaises(web.WebError):
+            web.operate(cdp, {'tabs': {}}, lambda: None, {'action': 'open', 'url': 'https://example.org'})
+        params = next(p for m, p in cdp.calls if m == 'Target.createTarget')
+        self.assertTrue(params.get('newWindow'))
+
     def test_mutation_invalidates_ref_before_dispatch(self):
         cdp = FakeCDP()
         state = {'tabs': {'owned': {'refs': {'old': {'backend': 7}}}}}
