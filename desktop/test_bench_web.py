@@ -1180,6 +1180,64 @@ class TabQuotaTests(unittest.TestCase):
             self.open()
         self.assertFalse(any(m == 'Target.createTarget' for m, _ in self.cdp.calls))
 
+    def test_unregistered_pages_cannot_bypass_browser_quota(self):
+        self.live(*[f'orphan{i}' for i in range(12)])
+        with self.assertRaisesRegex(web.WebError, 'tab_quota: 12'):
+            self.open()
+
+    def test_duplicate_open_reuses_without_navigation_or_third_window(self):
+        state = {'tabs': {'owned': {}, 'second': {}}}
+        self.cdp.targets = [page('owned', url='https://example.org/'), page('second')]
+        result = web.operate(self.cdp, state, lambda: None, {'action': 'open', 'url': 'https://example.org/'})
+        self.assertEqual(result['tab'], 'owned')
+        self.assertTrue(result['reused'])
+        self.assertEqual([m for m, _ in self.cdp.calls], ['Target.getTargets'])
+        with self.assertRaisesRegex(web.WebError, 'mission_tab_quota'):
+            web.operate(self.cdp, state, lambda: None, {'action': 'open', 'url': 'https://different.example/'})
+
+    def test_finish_only_closes_owned_and_requires_checkpoint_for_kept_tabs(self):
+        state = {'tabs': {'owned': {}, 'second': {}}}
+        self.cdp.targets = [page('owned'), page('second'), page('foreign')]
+        with self.assertRaisesRegex(web.WebError, 'checkpoint_required'):
+            web.operate(self.cdp, state, lambda: None, {'action': 'finish', 'keep_tabs': ['second']})
+        call = self.cdp.call
+        self.cdp.call = lambda method, params=None, session=None: ({'success': True}
+            if method == 'Target.closeTarget' and params['targetId'] == 'owned' else call(method, params, session))
+        result = web.operate(self.cdp, state, lambda: None, {'action': 'finish', 'keep_tabs': ['second'],
+            'reason': 'submission uncertain', 'next_step': 'check receipt before retry'})
+        self.assertEqual(result, {'closed': ['owned'], 'kept': ['second'], 'complete': False})
+        self.assertEqual(set(state['tabs']), {'second'})
+        self.assertEqual(state['tabs']['second']['checkpoint']['next_step'], 'check receipt before retry')
+        with self.assertRaisesRegex(web.WebError, 'tab_not_owned'):
+            web.operate(self.cdp, state, lambda: None, {'action': 'finish', 'keep_tabs': ['foreign'],
+                'reason': 'x', 'next_step': 'y'})
+
+    def test_finish_saves_partial_cleanup_and_retains_uncertain_close(self):
+        state = {'tabs': {'owned': {}, 'second': {}}}
+        self.cdp.targets = [page('owned'), page('second'), page('foreign')]
+        saved, attempts = [], []
+        call = self.cdp.call
+        def close(method, params=None, session=None):
+            if method == 'Target.closeTarget':
+                attempts.append(params['targetId'])
+                return {'success': params['targetId'] == 'owned'}
+            return call(method, params, session)
+        self.cdp.call = close
+        with self.assertRaisesRegex(web.WebError, 'close_unconfirmed'):
+            web.operate(self.cdp, state, lambda: saved.append(set(state['tabs'])), {'action': 'finish'})
+        self.assertEqual(attempts, ['owned', 'second'])
+        self.assertEqual(saved, [{'second'}])
+        self.assertEqual(set(state['tabs']), {'second'})
+
+    def test_lifecycle_ledger_contains_owner_and_no_page_content(self):
+        with patch.object(web, 'paths', return_value=(None, Path(self.dir.name))):
+            web.audit_event('demo', 'my-mission', 'open', 'returned', 'target', reused=True)
+        row = json.loads((Path(self.dir.name) / 'web-events.ndjson').read_text())
+        self.assertEqual(row['mission'], 'my-mission')
+        self.assertTrue(row['at'].endswith('-03:00'))
+        self.assertIn('pid', row)
+        self.assertNotIn('url', row)
+
     def test_closed_tabs_and_other_browsers_do_not_count(self):
         self.live(*[f't{i}' for i in range(5)])
         self.store('stale', [f'gone{i}' for i in range(20)])
