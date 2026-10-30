@@ -342,3 +342,26 @@ and file-input metadata/selection.
 Implementation references: [CDP Accessibility](https://chromedevtools.github.io/devtools-protocol/tot/Accessibility/),
 [CDP DOM](https://chromedevtools.github.io/devtools-protocol/tot/DOM/) and
 [CDP Input](https://chromedevtools.github.io/devtools-protocol/tot/Input/).
+
+
+## Hygiene and lifecycle (29 October 2026)
+
+Use `navigate` on owned tabs. `open` reuses an identical mission URL without
+navigating it and refuses a third live mission tab. The shared capacity of 12
+counts **all** page targets, including pages left outside the web registry.
+`hygiene` reports counts and unregistered target IDs; this is diagnostic and
+never authorizes adopting or closing somebody else's page.
+
+End a mission with `finish`. It closes only that mission's targets and saves
+each successful close before attempting the next. Preserve pending work with
+`finish --keep-tab TARGET --reason "uncertain submission" --next-step "check receipt"`.
+It rejects foreign targets and retention without both checkpoint fields.
+Partial failure leaves unconfirmed targets registered; reconcile before retrying.
+A blank window is only useful between immediate actions, never after completion.
+
+The private `web-events.ndjson` ledger records mission, process IDs, target IDs,
+actions and outcomes in America/Sao_Paulo time, without page URLs or contents.
+The CLI loads updates on each call. Existing MCP processes need their owner's
+reconnection to expose new actions; do not restart another mission's client.
+Direct CDP/Playwright clients must keep their own ownership registry and cleanup;
+they are not automatically governed by the semantic browser's quota or ledger.
