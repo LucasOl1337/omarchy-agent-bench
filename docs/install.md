@@ -156,3 +156,13 @@ Allocation, CDP URL parsing, `.keep` / GC, and viewer crash-vs-close recovery ar
 trees, with `Path.home()` mocked and executable fixtures replacing service and
 display commands. It checks reinstallation state, relative prefixes, copy-only
 mode and the installed CLI/MCP entry points without a desktop or real systemd.
+
+## Omarchy 4.5: workspaces por monitor
+
+Omarchy 4.5 dá a cada monitor um bloco de dez workspaces (1–10, 11–20, 21–30) e renumera os que mudam de monitor. Nesse esquema 6–11 cruza dois blocos. Prenda as bancadas num monitor com `~/.config/agent-bench/workspaces`:
+
+```text
+6-10 monitor=ASUSTek COMPUTER INC VG32VQ1B
+```
+
+Os números são posições dentro do bloco desse monitor: se o Omarchy deu 11–20 a ele, as bancadas vão para 16–20 e `agent-bench visit 6` cai em 16. Sem o arquivo, nada muda (6–11). Supervisor, CLI, `bench_web` e `contrib/omarchy/agent-bench.lua` leem o mesmo arquivo (`desktop/bench_workspaces.py`). Depois de criar o arquivo, reinicie `agent-bench-views.service` e recarregue o Hyprland.

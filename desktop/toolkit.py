@@ -3,6 +3,7 @@ import shutil
 from pathlib import Path
 
 from bench_ops import bench_browser_snapshot
+from bench_workspaces import AGENT_WORKSPACES
 
 BASE = Path(__file__).resolve().parent
 
@@ -23,7 +24,7 @@ def inspect(name, info, view):
     browser = bench_browser_snapshot(name)
     workspace = view.get('workspace')
     return {'name': name, 'display': display, 'display_socket': Path('/tmp/.X11-unix/X' + number).exists(),
-            'workspace': workspace, 'workspace_reserved': workspace in range(6, 12),
+            'workspace': workspace, 'workspace_reserved': workspace in AGENT_WORKSPACES,
             'viewer_running': bool(view.get('viewer_pid')),
             'control': info.get('control_mode', view.get('mode', 'desconhecido')),
             'clipboard_shared': info.get('clipboard_bridge', False), 'browser': browser,

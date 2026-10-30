@@ -4,9 +4,9 @@ import re
 import subprocess
 
 from bench_control import RUNTIME, views
+from bench_workspaces import AGENT_WORKSPACES, from_slot
 
 VIEWER_TITLE = re.compile(r'^Bancada dos agentes — ([a-z0-9][a-z0-9-]{0,39}) - TigerVNC$')
-AGENT_WORKSPACES = (6, 7, 8, 9, 10, 11)
 HERE = ('--here', 'aqui')
 
 
@@ -100,8 +100,8 @@ def resolve_visit(target, entries, window=None, workspace=None):
         if name and name in entries:
             workspace = entries[name].get('workspace', workspace)
         return workspace, name
-    if target.isdigit() and int(target) in AGENT_WORKSPACES:
-        workspace = int(target)
+    if target.isdigit() and from_slot(int(target)):
+        workspace = from_slot(int(target))
         matches = benches_on(workspace, entries)
         return workspace, matches[0] if len(matches) == 1 else None
     if target not in entries:
