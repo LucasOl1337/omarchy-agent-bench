@@ -11,11 +11,11 @@ import subprocess
 import time
 
 from bench_control import RUNTIME, rpc
+from bench_workspaces import AGENT_WORKSPACES
 
 CONFIG = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'hypr' / 'agent-bench.lua'
 REGISTRY = RUNTIME / 'views.json'
 SLOTS = RUNTIME / 'view-workspaces.tsv'
-AGENT_WORKSPACES = (6, 7, 8, 9, 10, 11)
 HERE = ('--here', 'aqui')
 LEAVE_SECONDS = 1.2
 VIEWER_TITLE = re.compile(r'^Bancada dos agentes — ([a-z0-9][a-z0-9-]{0,39}) - TigerVNC$')

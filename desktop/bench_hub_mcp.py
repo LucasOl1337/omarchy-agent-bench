@@ -35,7 +35,7 @@ HUB_TOOLS = [
          'required': ['bench']}},
     {'name': 'bench_list', 'description': 'Lista bancadas que respondem ao status, workspace atribuído quando disponível, controle reportado e rótulos de atores. Somente leitura; os rótulos não reservam a bancada.',
      'inputSchema': {'type': 'object', 'properties': {}}},
-    {'name': 'bench_doctor', 'description': 'Diagnóstico da bancada: display, workspace 6–11, CDP, controle.',
+    {'name': 'bench_doctor', 'description': 'Diagnóstico da bancada: display, workspace das bancadas (6–11 ou o configurado), CDP, controle.',
      'inputSchema': {'type': 'object', 'properties': {'bench': {'type': 'string'}}, 'required': ['bench']}},
     {'name': 'bench_cdp', 'description':
      'Endpoint CDP exclusivo do Chromium persistente desta bancada, com processo e diretório validados. Use Playwright connectOverCDP neste URL só em abas suas.',

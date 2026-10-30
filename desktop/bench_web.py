@@ -16,6 +16,7 @@ import uuid
 
 from bench_control import control, views
 from bench_ops import bench_browser_snapshot, paths, request, valid
+from bench_workspaces import AGENT_WORKSPACES, label as workspace_label
 
 ACTION_ROLES = frozenset(('button', 'link', 'textbox', 'searchbox', 'combobox',
     'checkbox', 'radio', 'switch', 'menuitem', 'tab', 'slider', 'spinbutton'))
@@ -83,8 +84,8 @@ def require_url(value):
 
 def validate_location(bench, view, snap):
     expected = paths(bench)[1] / 'chromium'
-    if view.get('workspace') not in range(6, 12):
-        raise WebError('workspace_invalid: expected an agent workspace 6–11')
+    if view.get('workspace') not in AGENT_WORKSPACES:
+        raise WebError('workspace_invalid: expected an agent workspace ' + workspace_label())
     if (snap.get('status') != 'conectado' or snap.get('lives_in') != bench
             or Path(snap.get('user_data_dir', '/')).resolve() != expected.resolve()):
         raise WebError('browser_location_invalid: require the running profile of this exact bench')
@@ -692,8 +693,8 @@ def run(args):
     request(bench, {'action': 'status'}, timeout=3)
     with control(bench):
         view = views('status', bench)
-        if view.get('workspace') not in range(6, 12):
-            raise WebError('workspace_invalid: expected an agent workspace 6–11')
+        if view.get('workspace') not in AGENT_WORKSPACES:
+            raise WebError('workspace_invalid: expected an agent workspace ' + workspace_label())
         snap = bench_browser_snapshot(bench, include_pages=False)
         validate_location(bench, view, snap)
         cdp = CDP(snap['webSocketDebuggerUrl'])
