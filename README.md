@@ -70,7 +70,7 @@ for the consistency checks and authentication limits.
 
 Open **Agent benches** in the launcher to show a viewer or take control. The package does not install workspace/`visit` key bindings: an ordinary workspace switch only shows the bench and leaves agent input active. To enter and take control, the **human** can run `agent-bench visit demo` (or `agent-bench visit 6` when that workspace has one bench). This focuses the viewer and requests mouse/keyboard control; agents must not use it to move the human's focus.
 
-On Mark, custom **Super+6** … **Super+9**, **Super+0** (workspace 10) and **Super+Ctrl+0** (11) already invoke `visit` and take control. Other installations depend on their own bindings; **Super+Alt+A** only takes control when configured. Leaving the bench workspace on all monitors gives control back automatically. Clipboard stays separate. See [coexistence](docs/coexistence.md).
+On Omarchy 4.5 (per-monitor workspaces), custom **Super+F1** … **Super+F5** invoke `visit 6` … `visit 10` (the bench slots on the configured monitor) and take control; Super+1…0 stay Omarchy's. On 4.0 the bindings were **Super+6** … **Super+0** and **Super+Ctrl+0** (11). Other installations depend on their own bindings; **Super+Alt+A** only takes control when configured. Leaving the bench workspace on all monitors gives control back automatically. Clipboard stays separate. See [coexistence](docs/coexistence.md).
 
 Point the harness at the multiplexed MCP (examples in [`contrib/mcp/`](contrib/mcp/)):
 
