@@ -30,8 +30,8 @@ workspace with no bench can be visited but grants no bench control. `visit`
 focuses the host workspace/viewer, so it is a **human command**, not an agent route.
 The human can also bind `agent-bench collaborate --here` to a takeover shortcut.
 
-**Mark configuration:** its existing `bindings.lua` maps **Super+6** … **Super+9**,
-**Super+0** (10) and **Super+Ctrl+0** (11) to `visit`, which requests control as part
+**Mark configuration:** on Omarchy 4.5 `bindings.lua` maps **Super+F1** … **Super+F5**
+to `visit 6` … `visit 10` (on 4.0: Super+6…0 and Super+Ctrl+0), which requests control as part
 of entering. **Super+Alt+A** calls `collaborate --here`. These are local bindings,
 not defaults installed by this package. Other installations must check their own
 configuration before relying on a shortcut.
