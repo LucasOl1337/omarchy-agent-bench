@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `agent-bench fila`: up to 2 heavy slots (`AGENT_BENCH_VAGAS_PESADAS`), FIFO; the second slot only opens 150 s after the previous one and with 9000 MiB of free VRAM (`nvidia-smi`), and no slot opens while a human game is marked in `$XDG_RUNTIME_DIR/humano-jogando`. Two Unreal plus the human's game exhausted 16 GB on 2026-10-16. `status` now promotes the first waiter.
+- `fila-promotor.service` (new, enabled by `install.sh`): calls `agent-bench fila` every 45 s so a bench that waited keeps getting promoted once VRAM returns; `Restart=on-failure`.
+- Outside the queue a bench now gets 3 cores and all benches together 12 (drop-ins in `contrib/systemd`; decision of 2026-10-20). Leaving the queue restores the same 3-core cap (`AGENT_BENCH_COTA_FORA_DA_FILA`, was hard-coded at 1.5).
+- Chromium: opt-in unpacked extensions listed one per line in `<state>/extensoes` (`bench_extension_args`), used for NopeCHA.
+
 ## 0.3.0 — 2026-09-27
 
 - Login and Cloudflare: Chromium runs on a fixed CDP port per bench with the real GPU (no `--remote-debugging-port=0`, no `--disable-gpu`), so managed challenges pass with a CDP client attached. `DevToolsActivePort` is written by agent-bench.

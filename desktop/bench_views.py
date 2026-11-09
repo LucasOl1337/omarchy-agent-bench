@@ -124,7 +124,9 @@ def publish_bar():
     if benches == _last_bar:
         return
     temp = BAR.with_suffix('.json.tmp')
-    temp.write_text(json.dumps({'updated': time.time(), 'benches': benches}, ensure_ascii=False) + '\n')
+    from bench_ops import IDLE_SECONDS
+    temp.write_text(json.dumps({'updated': time.time(), 'idle_timeout_seconds': IDLE_SECONDS,
+                               'benches': benches}, ensure_ascii=False) + '\n')
     temp.replace(BAR)
     _last_bar = benches
 

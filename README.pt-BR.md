@@ -18,7 +18,7 @@ Agentes de código no desktop pessoal pegam o mouse, abrem aba no Chromium human
 | Workspaces **1–5** | Sessão humana. `hyprctl -j` só leitura. Sem grim, ydotool ou computer-use aí |
 | Skills | Agent Skills: convivência, operação da bancada, receita de login persistente |
 
-Um Xvnc vazio é barato (~80–140 MiB, ~0,3 s). O custo é o Chromium. Bancadas sobem sob demanda. Após 25 min sem comandos de agente, o encerramento automático para a bancada, a menos que haja um cliente CDP conectado ou processo nativo gastando CPU de verdade; abas esquecidas e apps Electron parados não seguram mais a bancada (`padrao` e controle humano ficam). O perfil sobrevive ao `stop`; `agent-bench keep NOME` grava `.keep` para o GC de disco não apagar o login. Veja [retenção de sessões](docs/session-retention.md).
+Um Xvnc vazio é barato (~80–140 MiB, ~0,3 s). O custo é o Chromium. Bancadas sobem sob demanda. Após 15 min sem comandos de agente, o supervisor encerra a bancada, salvo controle humano, operação protegida, cliente CDP conectado, tarefa nativa presente ou vaga pesada válida. Abas esquecidas e apps Electron parados não seguram a bancada. O encerramento automático preserva todos os perfis; `agent-bench keep NOME` grava `.keep` para o GC de disco não apagar o login. Veja [retenção de sessões](docs/session-retention.md).
 
 ## Uso
 

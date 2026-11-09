@@ -186,6 +186,7 @@ print(json.dumps({'tools':[{'name':'click','description':'fixture native tool','
         self.assertEqual([
             ['systemctl', '--user', 'daemon-reload'],
             ['systemctl', '--user', 'enable', '--now', 'agent-bench-views.service'],
+            ['systemctl', '--user', 'enable', '--now', 'fila-promotor.service'],
             ['systemctl', '--user', 'enable', 'agent-bench@padrao.service']],
             [call for call in self.calls() if call[0] == 'systemctl'])
 
