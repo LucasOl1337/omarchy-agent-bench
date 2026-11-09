@@ -11,7 +11,7 @@ Nested Xvnc benches. Empty desktop ~0.3 s; Chromium is the cost. Do not create a
 
 ```sh
 agent-bench ensure NAME          # start if needed, dock viewer
-agent-bench cdp cofre            # the only logged-in browser (never copied)
+agent-bench cdp cofre            # a logged-in bench, shared by missions (never copied)
 agent-bench-profile prepare NAME --apply # empty throwaway profile; the old seed is no longer copied
 agent-bench browser-status NAME  # require this bench's own profile/process
 agent-bench cdp NAME            # CDP JSON + Playwright connectOverCDP
@@ -109,6 +109,7 @@ automatic replay. Use only the bench clipboard; do not restart another bench.
 - Require `browser-status` to report `lives_in == NAME` and that bench's own `user_data_dir`.
 - Prefer `bench_web`/validated CDP for HTML; use bench X11 input for opaque controls.
 - One exclusive name per concurrent GUI task; never share a user-data-dir between processes.
+- Heavy work (3D/WebGL render, video, recording, long capture) holds the heavy slot: `agent-bench fila NAME rodar -- CMD`, or `fila NAME entrar "reason"` (blocks; call again every 15 min) then `fila NAME sair`. One slot at a time, FIFO; outside it a bench is capped at 1.5 cores. See USAGE.md "Fila pesada".
 - Close finished owned tabs. Preserve pending forms, uncertain submissions and unsaved native work.
 - Downloads use the observed UI and a private destination; verify the actual file/name before repeating anything. The local Save As proof is not a new download API or permission to change global CDP download settings.
 - Idle cleanup retains native processes or an uncertain inventory; it does not save documents. `keep` protects disk GC only.
