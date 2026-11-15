@@ -37,7 +37,7 @@ PID/window and current element tokens. Pixel CUA requires a new client with
 proven driver startup protection; `bench=` and an opaque page alone are not
 proof. See [native isolation](native-isolation.md). Use bench CDP for HTML forms.
 
-`agent-bench mcp NAME` is a dedicated CUA server for a single name. The multiplexor is the default for Cursor, Claude, Codex, Hermes, Gemini, and OpenCode.
+`agent-bench mcp NAME` is a dedicated CUA server for a single name. The multiplexor is the default for Cursor, Claude, Codex, Hermes, and Gemini.
 
 ## Owner
 

@@ -65,7 +65,7 @@ agent-bench-mcp                 # stdio: bench_ensure, bench_cdp, CUA com parâm
 agent-bench mcp hermes-teste   # CUA de uma bancada só
 ```
 
-`agent-hub sync-policy` declara `agent-bench-mcp` em Cursor, Codex, Claude, OpenCode, Gemini e Hermes. A ponte aplica a trava de controle humano e o retorno do viewer a cada ferramenta de entrada. Não conecta ao daemon CUA humano. `bench_ensure` sobe a bancada sozinho (~0,3 s).
+`agent-hub sync-policy` declara `agent-bench-mcp` em Cursor, Codex, Claude, Gemini e Hermes. A ponte aplica a trava de controle humano e o retorno do viewer a cada ferramenta de entrada. Não conecta ao daemon CUA humano. `bench_ensure` sobe a bancada sozinho (~0,3 s).
 
 No hub multiplexado, `tools/list` lê o catálogo estático filtrado sem `ensure`
 nem criação de desktop/driver. Isso não confirma que uma bancada esteja pronta.
