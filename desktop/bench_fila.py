@@ -105,13 +105,22 @@ def _vram_livre():
         return None
 
 
-def _cabe_mais(st):
-    if len(st['vagas']) >= VAGAS: return False
+def _motivo_capacidade(st):
+    if len(st['vagas']) >= VAGAS:
+        return {'codigo': 'vagas_ocupadas', 'texto': f'{VAGAS} vagas pesadas ocupadas'}
     # A VRAM da vaga recém-dada só aparece quando a Unreal dela carrega: espera ela subir.
-    if st['vagas'] and time.time() - max(v['desde'] for v in st['vagas']) < SUBIDA_S: return False
+    if st['vagas'] and time.time() - max(v['desde'] for v in st['vagas']) < SUBIDA_S:
+        return {'codigo': 'subida_da_ultima_vaga', 'texto': 'aguardando a carga da última vaga'}
     # Vale até pra primeira vaga: Unreal lançada fora da fila também ocupa VRAM.
     livre = _vram_livre()
-    return livre is None or livre >= VRAM_LIVRE_MIN
+    if livre is not None and livre < VRAM_LIVRE_MIN:
+        return {'codigo': 'vram_insuficiente', 'texto': f'VRAM livre {livre} MiB; mínimo {VRAM_LIVRE_MIN} MiB',
+                'vram_livre_mib': livre, 'vram_livre_min': VRAM_LIVRE_MIN}
+    return None
+
+
+def _cabe_mais(st):
+    return _motivo_capacidade(st) is None
 
 
 def _limpar(st, agora):
@@ -145,7 +154,13 @@ def entrar(bench, motivo='', timeout=None):
                 return _com_cota(st, bench, {'status': 'com vaga', **atual, 'expira_em_s': TTL})
             fila = [e['bench'] for e in st['espera']]
             jogos = _jogando()
-            if not jogos and (not fila or fila[0] == bench) and _cabe_mais(st):
+            if jogos:
+                bloqueio = {'codigo': 'humano_jogando', 'texto': 'humano jogando: ' + ', '.join(jogos)}
+            elif fila and fila[0] != bench:
+                bloqueio = {'codigo': 'ordem_da_fila', 'texto': 'aguardando a vez de ' + fila[0]}
+            else:
+                bloqueio = _motivo_capacidade(st)
+            if bloqueio is None:
                 st['espera'] = [e for e in st['espera'] if e['bench'] != bench]
                 vaga = {'bench': bench, 'motivo': motivo, 'desde': agora, 'renovado': agora}
                 st['vagas'].append(vaga)
@@ -156,11 +171,14 @@ def entrar(bench, motivo='', timeout=None):
             posicao = [e['bench'] for e in st['espera']].index(bench) + 1
             ocupada = ', '.join([f'humano jogando {j}' for j in jogos]
                                 + [f"{v['bench']} ({v['motivo'] or 'sem motivo'})" for v in st['vagas']])
-        if posicao != ultima:
-            print(f'agent-bench fila: {bench} esperando, posição {posicao}; vaga com {ocupada}', file=sys.stderr, flush=True)
-            ultima = posicao
+        estado = (posicao, bloqueio['codigo'])
+        if estado != ultima:
+            ocupantes = f'; vaga com {ocupada}' if ocupada else ''
+            print(f"agent-bench fila: {bench} esperando, posição {posicao}; {bloqueio['texto']}{ocupantes}",
+                  file=sys.stderr, flush=True)
+            ultima = estado
         if timeout is not None and agora - inicio >= timeout:
-            return {'status': 'esperando', 'posicao': posicao, 'vaga_com': ocupada}
+            return {'status': 'esperando', 'posicao': posicao, 'vaga_com': ocupada, 'bloqueio': bloqueio}
         time.sleep(5)
 
 
