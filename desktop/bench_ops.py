@@ -940,7 +940,7 @@ def native_job_present(name):
 def should_reap(name, now=None, check_input=True):
     if name in NEVER_REAP:
         return False
-    if (RUNTIME / name / 'human-control').exists():
+    if (RUNTIME / name / 'human-control').exists() or (RUNTIME / name / 'human-coop').exists():
         return False
     lock = RUNTIME / name / 'input.lock'
     if check_input and lock.exists():

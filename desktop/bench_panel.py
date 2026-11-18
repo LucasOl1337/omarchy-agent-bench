@@ -21,7 +21,7 @@ table.heading('#0', text='Bancada'); table.column('#0', width=310)
 table.heading('workspace', text='Workspace'); table.column('workspace', width=100, anchor='center')
 table.heading('mode', text='Controle'); table.column('mode', width=130, anchor='center')
 table.pack(fill='both', expand=True)
-status = tk.StringVar(value='Mostrar tela e Assumir controle são ações suas. Atalhos dependem da configuração; visit entra e assume. Ao sair da bancada em todos os monitores, o controle volta ao agente.')
+status = tk.StringVar(value='Entrar junto libera seu mouse e teclado sem pausar o agente (coop); Assumir controle pausa o agente. Ao sair da bancada em todos os monitores, o controle volta ao agente.')
 
 def refresh():
     try:
@@ -29,7 +29,8 @@ def refresh():
         for name in table.get_children():
             if name not in entries: table.delete(name)
         for name, entry in sorted(entries.items(), key=lambda pair: pair[1]['workspace']):
-            mode = 'Você' if (RUNTIME / name / 'human-control').exists() else 'Agente'
+            mode = ('Você' if (RUNTIME / name / 'human-control').exists()
+                    else 'Coop' if (RUNTIME / name / 'human-coop').exists() else 'Agente')
             values = (entry['workspace'], mode)
             if table.exists(name): table.item(name, values=values)
             else: table.insert('', 'end', iid=name, text=name, values=values)
@@ -61,16 +62,19 @@ def change(action):
         views(action, name)
         if action == 'collaborate':
             status.set('Controle com você. Super+1 (ou Devolver ao agente) devolve; o agente continua pausado só enquanto você estiver no workspace da bancada.')
+        elif action == 'coop':
+            status.set('Coop: você e o agente mexem juntos. Super+Alt+A pausa o agente; Super+1 sai.')
         else:
             status.set('Controle devolvido. A janela retornou ao workspace reservado.')
-        mode = 'Você' if action == 'collaborate' else 'Agente'
+        mode = {'collaborate': 'Você', 'coop': 'Coop'}.get(action, 'Agente')
         values = list(table.item(name, 'values')); values[1] = mode; table.item(name, values=values)
     except Exception as exc: messagebox.showerror('Bancadas', str(exc))
 
 buttons = ttk.Frame(outer)
 buttons.pack(fill='x', pady=(14,10))
 ttk.Button(buttons, text='Mostrar tela', command=show).pack(side='left')
-ttk.Button(buttons, text='Assumir controle', command=lambda: change('collaborate')).pack(side='left', padx=8)
+ttk.Button(buttons, text='Entrar junto (coop)', command=lambda: change('coop')).pack(side='left', padx=8)
+ttk.Button(buttons, text='Assumir controle', command=lambda: change('collaborate')).pack(side='left', padx=(0, 8))
 ttk.Button(buttons, text='Devolver ao agente', command=lambda: change('resume')).pack(side='left')
 ttk.Label(outer, textvariable=status, wraplength=695).pack(anchor='w')
 refresh()

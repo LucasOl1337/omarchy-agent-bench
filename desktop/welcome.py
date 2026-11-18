@@ -41,12 +41,13 @@ status=tk.StringVar();tk.Label(header,textvariable=status,bg=bg,fg=muted).pack(a
 def refresh_status():
     try:
         view=json.loads((runtime/'views.json').read_text()).get(name,{})
-        control='Humano no controle · agente pausado' if (runtime/name/'human-control').exists() else 'Agente no controle'
+        control=('Humano no controle · agente pausado' if (runtime/name/'human-control').exists()
+                 else 'Coop · você e o agente juntos' if (runtime/name/'human-coop').exists() else 'Agente no controle')
         status.set(f"Workspace {view.get('workspace','em preparação')}  ·  {os.environ.get('DISPLAY','')}  ·  {control}  ·  Clipboard próprio")
     except (OSError,ValueError): status.set('Preparando identificação da bancada…')
     root.after(3000,refresh_status)
 refresh_status()
-notice=tk.StringVar(value='Toda interface desta tarefa fica aqui. Super+6 visita; Super+Alt+A assume; Super+1 devolve. Workspaces 1–5 pertencem ao humano.')
+notice=tk.StringVar(value='Toda interface desta tarefa fica aqui. Super+F1…F5 entra em coop (o agente segue); Super+Alt+A pausa o agente; Super+1 sai.')
 def run(*args):
     try:
         result=subprocess.run([bench,*args],capture_output=True,text=True,timeout=25)

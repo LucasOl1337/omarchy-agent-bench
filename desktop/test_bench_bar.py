@@ -27,13 +27,13 @@ class BarState(unittest.TestCase):
                  patch.dict(views.entries, entries, clear=True):
                 bar = views.bar_state(now=1030)
         self.assertEqual(bar['rascunho'], {'workspace': 7, 'owner': 'codex', 'active': True,
-                                           'idle_seconds': 30, 'human': False, 'kind': 'descartavel'})
+                                           'idle_seconds': 30, 'human': False, 'coop': False, 'kind': 'descartavel'})
         self.assertEqual(bar['cofre']['kind'], 'cofre')
         self.assertTrue(bar['cofre']['human'])
         self.assertEqual(bar['cofre']['idle_seconds'], 330)
         self.assertFalse(bar['cofre']['active'])
         self.assertEqual(bar['antiga'], {'workspace': 9, 'owner': 'unknown', 'active': False,
-                                         'idle_seconds': None, 'human': False, 'kind': 'persistente'})
+                                         'idle_seconds': None, 'human': False, 'coop': False, 'kind': 'persistente'})
 
 
 if __name__ == '__main__':
