@@ -107,6 +107,20 @@ class DuasVagasTests(unittest.TestCase):
         self.vram = 9000
         self.assertEqual('com vaga', self.espera('b')['status'])
 
+    def test_porta_wait_explains_vram_even_with_no_occupants(self):
+        self.vram = 8862
+        stderr = io.StringIO()
+        with patch('sys.stderr', stderr):
+            got = fila.entrar('a', 'preflight Porta', timeout=0)
+        self.assertEqual('esperando', got['status'])
+        self.assertEqual('', got['vaga_com'])
+        self.assertEqual('vram_insuficiente', got['bloqueio']['codigo'])
+        self.assertIn('VRAM livre 8862 MiB; mínimo 9000 MiB', stderr.getvalue())
+        self.assertEqual([], self.quota)
+        self.assertEqual([], fila.status()['vagas'])
+        self.vram = 9000
+        self.assertEqual('com vaga', self.espera('a')['status'])
+
     def test_unknown_vram_does_not_block(self):
         self.vram = None
         self.assertEqual('com vaga', self.espera('a')['status'])
