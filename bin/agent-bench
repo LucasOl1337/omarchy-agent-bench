@@ -136,6 +136,7 @@ def serve(name):
                         pass
                 if action == 'status':
                     result = {**info, 'control_mode': 'humano' if (runtime / 'human-control').exists() else 'agente',
+                              'coop': (runtime / 'human-coop').exists(),
                               'owner': load_owner(name).get('owner'), 'human_input': dict(human_input),
                               'tasks': cgroup_tasks()}
                 elif action == 'human-input':
@@ -230,10 +231,10 @@ def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--here', action='store_true',
-                        help='collaborate/resume/visit/close-here na bancada da janela ou workspace focado')
+                        help='collaborate/coop/resume/visit/close-here na bancada da janela ou workspace focado')
     parser.add_argument('action', choices=['start', 'stop', 'status', 'list', 'exec', 'launch',
                         'browser', 'home', 'terminal', 'tools', 'doctor', 'screenshot', 'clipboard', 'view', 'mcp',
-                        'collaborate', 'resume', 'dock', 'ensure', 'cdp', 'browser-status', 'gc', 'keep', 'visit', 'close-here', 'fila',
+                        'collaborate', 'coop', 'resume', 'dock', 'ensure', 'cdp', 'browser-status', 'gc', 'keep', 'visit', 'close-here', 'fila',
                         '_boot', '_serve', '_close-browser'])
     parser.add_argument('name', nargs='?', default=None)
     parser.add_argument('args', nargs=argparse.REMAINDER)
@@ -264,9 +265,9 @@ def main():
         from bench_human import visit
         target = '--here' if a.here or not a.name or a.name in ('--here', 'aqui') or '--here' in a.args else a.name
         print(json.dumps(visit(target), indent=2)); return 0
-    if a.here or '--here' in a.args or (a.action in ('collaborate', 'resume') and a.name == 'aqui'):
-        if a.action not in ('collaborate', 'resume'):
-            raise ValueError('--here só se aplica a collaborate, resume, visit ou close-here')
+    if a.here or '--here' in a.args or (a.action in ('collaborate', 'coop', 'resume') and a.name == 'aqui'):
+        if a.action not in ('collaborate', 'coop', 'resume'):
+            raise ValueError('--here só se aplica a collaborate, coop, resume, visit ou close-here')
         print(json.dumps(views(a.action, '--here' if a.here or '--here' in a.args else 'aqui'), indent=2)); return 0
     name = valid(a.name or 'padrao')
     if a.action == 'browser-status':
@@ -330,7 +331,7 @@ def main():
         with control(name): result = open_browser(name, info, urls, isolated=isolated)
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return 0 if result.get('status') == 'conectado' else 1
-    if a.action in ('collaborate', 'resume', 'dock'):
+    if a.action in ('collaborate', 'coop', 'resume', 'dock'):
         print(json.dumps(views(a.action, name), indent=2)); return 0
     if a.action == 'mcp':
         env = clean_env(); env.update(info['env'])

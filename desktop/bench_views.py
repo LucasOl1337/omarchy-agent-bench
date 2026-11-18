@@ -114,7 +114,8 @@ def bar_state(now=None):
             kind = 'descartavel'
         benches[name] = {'workspace': entry.get('workspace'), 'owner': owner,
                          'active': idle is not None and idle < 60, 'idle_seconds': idle,
-                         'human': (runtime / 'human-control').exists(), 'kind': kind}
+                         'human': (runtime / 'human-control').exists(),
+                         'coop': (runtime / 'human-coop').exists(), 'kind': kind}
     return benches
 
 
@@ -130,6 +131,15 @@ def publish_bar():
     temp.replace(BAR)
     _last_bar = benches
 
+
+def mode_of(name):
+    """humano: o agente está pausado; coop: os dois mexem; agente: só o agente."""
+    runtime = RUNTIME / name
+    if (runtime / 'human-control').exists():
+        return 'humano'
+    if (runtime / 'human-coop').exists():
+        return 'coop'
+    return 'agente'
 
 def rules():
     hypr('eval', 'dofile(' + json.dumps(str(CONFIG)) + ')')
@@ -192,7 +202,7 @@ def ensure(name, reopen=True):
         else:
             proc.terminate()
             raise RuntimeError('Viewer não apareceu como janela identificável')
-    return {**entry, 'name': name, 'mode': 'humano' if (RUNTIME / name / 'human-control').exists() else 'agente'}
+    return {**entry, 'name': name, 'mode': mode_of(name)}
 
 def dock(name):
     result = ensure(name)
@@ -242,8 +252,47 @@ def handoff(name, human):
         else:
             rpc(runtime / 'control.sock', {'action': 'human-input', 'enabled': False})
             hold.unlink(missing_ok=True)
+            (runtime / 'human-coop').unlink(missing_ok=True)
             dock(name)
     return {**entries[name], 'name': name, 'mode': 'humano' if human else 'agente'}
+
+def coop(name):
+    """Libera mouse e teclado do humano sem pausar o agente (Lucas, 18/11/2026).
+
+    Não pega o input.lock: uma operação do agente em andamento continua. Uma pausa
+    anterior (human-control) fica como está; só Super+Alt+A ou o painel pausam.
+    """
+    info = live(name)
+    if info.get('protocol_version', 1) < 2:
+        raise RuntimeError('Esta bancada foi iniciada antes da atualização. O proprietário deve encerrá-la e iniciá-la quando puder para habilitar colaboração.')
+    runtime = RUNTIME / name
+    if (runtime / 'human-control').exists():
+        return {**ensure(name), 'name': name, 'mode': 'humano'}
+    ensure(name)
+    marker = runtime / 'human-coop'
+    had_marker = marker.exists()
+    marker.touch(mode=0o600)
+    try:
+        rpc(runtime / 'control.sock', {'action': 'human-input', 'enabled': True})
+    except Exception as exc:
+        state = None
+        try:
+            state = live(name).get('human_input')
+        except Exception:
+            pass
+        if (not had_marker and isinstance(state, dict)
+                and state.get('confirmed') is True and state.get('enabled') is False):
+            marker.unlink(missing_ok=True)
+        raise RuntimeError(f'A bancada {name} não liberou mouse/teclado: {exc}. '
+                           + tasks_hint(info)) from exc
+    return {**entries[name], 'name': name, 'mode': 'coop'}
+
+def leave_coop(name):
+    """Humano saiu da bancada em coop: desliga a entrada dele; o agente nunca parou."""
+    runtime = RUNTIME / name
+    rpc(runtime / 'control.sock', {'action': 'human-input', 'enabled': False})
+    (runtime / 'human-coop').unlink(missing_ok=True)
+    return {**entries[name], 'name': name, 'mode': 'agente'}
 
 def tasks_hint(info):
     info = info if isinstance(info, dict) else {}
@@ -273,7 +322,8 @@ def release_departed(now=None):
         return []
     released = []
     for name, entry in list(entries.items()):
-        if not (RUNTIME / name / 'human-control').exists():
+        paused = (RUNTIME / name / 'human-control').exists()
+        if not paused and not (RUNTIME / name / 'human-coop').exists():
             departed_since.pop(name, None)
             continue
         if entry.get('workspace') in visible:
@@ -283,7 +333,10 @@ def release_departed(now=None):
         if now - departed_since[name] < LEAVE_SECONDS:
             continue
         try:
-            handoff(name, False)
+            if paused:
+                handoff(name, False)
+            else:
+                leave_coop(name)
             departed_since.pop(name, None)
             released.append(name)
             print('agent-bench-views auto-resume:', name, flush=True)
@@ -323,6 +376,7 @@ class Handler(socketserver.StreamRequestHandler):
                     raise RuntimeError('Bancada sob controle humano; aguarde a devolução.')
                 result = dock(name)
             elif action == 'collaborate': result = handoff(resolve(name), True)
+            elif action == 'coop': result = coop(resolve(name))
             elif action == 'resume': result = handoff(resolve(name), False)
             elif action == 'status': result = entries.get(name, {})
             else: raise ValueError('Ação desconhecida')

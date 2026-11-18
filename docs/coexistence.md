@@ -32,7 +32,7 @@ The human can also bind `agent-bench collaborate --here` to a takeover shortcut.
 
 **Mark configuration:** on Omarchy 4.5 `bindings.lua` maps **Super+F1** … **Super+F5**
 to `visit 6` … `visit 10` (on 4.0: Super+6…0 and Super+Ctrl+0), which requests control as part
-of entering. **Super+Alt+A** calls `collaborate --here`. These are local bindings,
+of entering. Entering through `visit` uses `coop`: human input is enabled and the agent keeps running (no `human-control` file). **Super+Alt+A** calls `collaborate --here`, which pauses the agent. These are local bindings,
 not defaults installed by this package. Other installations must check their own
 configuration before relying on a shortcut.
 

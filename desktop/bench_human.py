@@ -124,7 +124,7 @@ def visit(target):
         # instead of failing before the workspace switch.
         labels = ', '.join(bench_label(n) for n in shared)
         notify(f'Workspace {workspace} tem {len(shared)} bancadas: {labels}. '
-               'Clique na que quer e use Super+Alt+A para assumir.')
+               'Clique na que quer e use Super+Alt+A para pausar o agente e assumir.')
         return {'workspace': workspace, 'visited': True, 'benches': shared}
     if name:
         for client in clients():
@@ -134,7 +134,8 @@ def visit(target):
                 except subprocess.CalledProcessError:
                     pass
                 break
-        result = views('collaborate', name)
+        # Coop (Lucas, 18/11/2026): entrar libera mouse e teclado sem pausar o agente.
+        result = views('coop', name)
         return {**result, 'visited': True}
     return {'workspace': workspace, 'visited': True}
 
