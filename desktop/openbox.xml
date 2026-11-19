@@ -10,4 +10,9 @@
     <keybind key="A-Tab"><action name="NextWindow"/></keybind>
     <keybind key="A-F4"><action name="Close"/></keybind>
   </keyboard>
+  <applications>
+    <application class="Chromium" type="normal">
+      <maximized>yes</maximized>
+    </application>
+  </applications>
 </openbox_config>

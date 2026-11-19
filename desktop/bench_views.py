@@ -186,7 +186,7 @@ def ensure(name, reopen=True):
         try:
             proc = subprocess.Popen(['vncviewer', '-ViewOnly=0', '-Shared',
                 '-AcceptClipboard=0', '-SendClipboard=0', '-SendPrimary=0', '-SetPrimary=0',
-                '-FullscreenSystemKeys=0', info['viewer_socket']], stdin=subprocess.DEVNULL,
+                '-RemoteResize=1', '-FullscreenSystemKeys=0', info['viewer_socket']], stdin=subprocess.DEVNULL,
                 stdout=logfile, stderr=logfile)
         finally:
             logfile.close()

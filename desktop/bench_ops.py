@@ -362,7 +362,7 @@ def last_activity(name):
             return None
 
 
-def chromium_argv(state, extra=None, *, port):
+def chromium_argv(state, extra=None, *, port, scale=None):
     urls = extra if extra else ['about:blank']
     # Renderer cap: each renderer is ~15-20 threads and a mission with a hundred
     # tabs pushed a bench past its TasksMax on 18/09/2026. Past the cap Chromium
@@ -376,6 +376,8 @@ def chromium_argv(state, extra=None, *, port):
     base = ['chromium', '--ozone-platform=x11', '--ozone-platform-hint=x11', '--no-first-run',
             '--no-default-browser-check', f'--remote-debugging-port={int(port)}',
             '--renderer-process-limit=24', '--hide-crash-restore-bubble']
+    if scale is not None:
+        base.append(f'--force-device-scale-factor={scale}')
     # Every process owns a distinct directory and uses its bench's isolated D-Bus.
     return [*base, *bench_extension_args(state), '--password-store=basic', '--profile-directory=Default',
             '--user-data-dir=' + str(Path(state) / 'chromium'), *urls]
@@ -685,7 +687,8 @@ def open_browser(name, info, urls=None, isolated=False):
             if _listener_inodes(port):
                 raise RuntimeError(f'CDP_PORTA_OCUPADA: a porta {port} desta bancada já está em uso.')
             (Path(state) / 'chromium/DevToolsActivePort').unlink(missing_ok=True)
-            request(name, {'action': 'launch', 'argv': chromium_argv(state, port=port), 'cwd': str(Path.cwd())})
+            argv = chromium_argv(state, port=port, scale=info.get('browser_scale'))
+            request(name, {'action': 'launch', 'argv': argv, 'cwd': str(Path.cwd())})
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
                 try:

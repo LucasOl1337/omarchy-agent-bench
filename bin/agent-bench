@@ -22,6 +22,7 @@ from bench_control import control, views
 from bench_ops import (RUNTIME, STATE, cdp_snapshot, claim_owner, ensure,
                        gc_sessions, keep_session, load_owner, open_browser, paths, record_origin, request, start,
                        touch_activity, valid, wait_cdp, bench_browser_snapshot, stop, close_browser)
+from bench_workspaces import browser_scale
 DROP = ('DISPLAY', 'WAYLAND_DISPLAY', 'WAYLAND_SOCKET', 'XAUTHORITY',
         'HYPRLAND_INSTANCE_SIGNATURE', 'DBUS_SESSION_BUS_ADDRESS',
         'DBUS_STARTER_ADDRESS', 'DBUS_STARTER_BUS_TYPE', 'AT_SPI_BUS_ADDRESS',
@@ -42,6 +43,9 @@ def boot(name):
     for p in (runtime, state, runtime / 'run', state / 'config', state / 'cache', state / 'data', state / 'state'):
         p.mkdir(parents=True, exist_ok=True, mode=0o700)
     env = clean_env()
+    scale = browser_scale()
+    if scale is not None:
+        env['AGENT_BENCH_BROWSER_SCALE'] = str(scale)
     env.update(AGENT_BENCH_NAME=name, XDG_RUNTIME_DIR=str(runtime / 'run'), XDG_CONFIG_HOME=str(state / 'config'),
                XDG_CACHE_HOME=str(state / 'cache'), XDG_DATA_HOME=str(state / 'data'),
                XDG_STATE_HOME=str(state / 'state'), XDG_SESSION_TYPE='x11',
@@ -89,7 +93,7 @@ def serve(name):
             '-depth', '24', '-nolisten', 'tcp', '-rfbport', '-1', '-rfbunixpath', str(view),
             '-rfbunixmode', '384', '-SecurityTypes', 'None', '-AlwaysShared',
             '-AcceptCutText=0', '-SendCutText=0', '-SendPrimary=0', '-SetPrimary=0',
-            '-AcceptKeyEvents=0', '-AcceptPointerEvents=0', '-AcceptSetDesktopSize=0',
+            '-AcceptKeyEvents=0', '-AcceptPointerEvents=0', '-AcceptSetDesktopSize=1',
             '-AllowOverride', 'AcceptKeyEvents,AcceptPointerEvents', '-rendernode', '', '-desktop', f'Bancada dos agentes — {name}'],
             stdout=log, stderr=log)
         children.append(xvnc)
@@ -104,6 +108,7 @@ def serve(name):
                        stdout=log, stderr=log, check=False)
     env = {k: os.environ[k] for k in ENV_KEYS if k in os.environ}
     info = {'name': name, 'protocol_version': 2, 'display': display, 'geometry': '1600x1000', 'server_pid': xvnc.pid,
+            'browser_scale': os.environ.get('AGENT_BENCH_BROWSER_SCALE'),
             'viewer_socket': str(view), 'clipboard_bridge': False, 'physical_input': False,
             'state': str(state), 'env': env, 'owner': (load_owner(name).get('owner') or claim_owner(name, 'systemd')['owner'])}
     (runtime / 'session.json').write_text(json.dumps(info, indent=2) + '\n')
@@ -135,7 +140,14 @@ def serve(name):
                     except (OSError, ValueError, struct.error):
                         pass
                 if action == 'status':
-                    result = {**info, 'control_mode': 'humano' if (runtime / 'human-control').exists() else 'agente',
+                    dimensions = info['geometry']
+                    try:
+                        geometry = subprocess.check_output(['xdotool', 'getdisplaygeometry'], text=True, timeout=.5)
+                        dimensions = 'x'.join(geometry.split())
+                    except subprocess.SubprocessError:
+                        pass
+                    result = {**info, 'geometry': dimensions,
+                              'control_mode': 'humano' if (runtime / 'human-control').exists() else 'agente',
                               'coop': (runtime / 'human-coop').exists(),
                               'owner': load_owner(name).get('owner'), 'human_input': dict(human_input),
                               'tasks': cgroup_tasks()}

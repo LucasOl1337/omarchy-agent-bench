@@ -1,10 +1,13 @@
 """A private bench's accessibility activation must not depend on the human bus."""
 import os
+import json
 from pathlib import Path
 import runpy
 import tempfile
 import unittest
 from unittest.mock import patch
+
+import bench_workspaces
 
 
 class BootAccessibility(unittest.TestCase):
@@ -27,6 +30,22 @@ class BootAccessibility(unittest.TestCase):
                 self.assertNotIn('DBUS_SESSION_BUS_ADDRESS', env)
                 self.assertEqual(str(root / 'runtime/run'), env['XDG_RUNTIME_DIR'])
                 self.assertEqual('dbus-broker', os.environ['ATSPI_DBUS_IMPLEMENTATION'])
+
+
+class BrowserScale(unittest.TestCase):
+    def test_uses_bench_monitor_scale_even_when_another_monitor_is_focused(self):
+        responses = [
+            {'bool': True},
+            [{'id': 1, 'monitor': 'HDMI-A-1'}, {'id': 26, 'monitor': 'eDP-1'}],
+            [{'name': 'HDMI-A-1', 'scale': 1, 'focused': True}, {'name': 'eDP-1', 'scale': 1.5}],
+        ]
+        with patch.object(bench_workspaces, 'AGENT_WORKSPACES', (26, 27)), \
+             patch('bench_workspaces.subprocess.check_output', side_effect=map(json.dumps, responses)):
+            self.assertEqual(bench_workspaces.browser_scale(), 1.5)
+
+    def test_uses_logical_scale_when_xwayland_already_scales(self):
+        with patch('bench_workspaces.subprocess.check_output', return_value='{"bool": false}'):
+            self.assertEqual(bench_workspaces.browser_scale(), 1)
 
 
 if __name__ == '__main__':

@@ -14,9 +14,11 @@ The slots are relative to that monitor's block: if Omarchy gave it 11-20, the
 benches use 16-20, and Super+6...0 on that monitor reach them. Without the
 monitor (or before Omarchy has assigned its block) the numbers are absolute.
 """
+import json
 import os
 from pathlib import Path
 import re
+import subprocess
 
 DEFAULT = (6, 7, 8, 9, 10, 11)
 SLOTS = 10
@@ -69,6 +71,25 @@ def load(config=None, state=None):
 
 
 AGENT_WORKSPACES, MONITOR, BASE = load()
+
+
+def browser_scale():
+    """Match the bench monitor when XWayland draws in physical pixels."""
+    def query(*args):
+        return json.loads(subprocess.check_output(['hyprctl', '-j', *args], timeout=2))
+
+    try:
+        if not query('getoption', 'xwayland:force_zero_scaling').get('bool'):
+            return 1
+        workspaces = {workspace['id']: workspace['monitor'] for workspace in query('workspaces')}
+        monitors = {monitor['name']: monitor['scale'] for monitor in query('monitors')}
+        for workspace in AGENT_WORKSPACES:
+            monitor = workspaces.get(workspace)
+            if monitor in monitors:
+                return monitors[monitor]
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        pass
+    return None
 
 
 def from_slot(number):
