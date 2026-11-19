@@ -50,7 +50,7 @@ def boot(name):
                XDG_CACHE_HOME=str(state / 'cache'), XDG_DATA_HOME=str(state / 'data'),
                XDG_STATE_HOME=str(state / 'state'), XDG_SESSION_TYPE='x11',
                XDG_CURRENT_DESKTOP='Openbox', GDK_BACKEND='x11', QT_QPA_PLATFORM='xcb',
-               GTK_USE_PORTAL='0', LIBGL_ALWAYS_SOFTWARE='1',
+               GTK_USE_PORTAL='0', LIBGL_ALWAYS_SOFTWARE='0' if env.get('AGENT_BENCH_RENDER_NODE') else '1',
                # The private session bus has no systemd manager for broker activation.
                ATSPI_DBUS_IMPLEMENTATION='dbus-daemon')
     os.execve('/usr/bin/dbus-run-session', ['dbus-run-session', '--', str(Path(__file__).resolve()), '_serve', name], env)
@@ -94,7 +94,8 @@ def serve(name):
             '-rfbunixmode', '384', '-SecurityTypes', 'None', '-AlwaysShared',
             '-AcceptCutText=0', '-SendCutText=0', '-SendPrimary=0', '-SetPrimary=0',
             '-AcceptKeyEvents=0', '-AcceptPointerEvents=0', '-AcceptSetDesktopSize=1',
-            '-AllowOverride', 'AcceptKeyEvents,AcceptPointerEvents', '-rendernode', '', '-desktop', f'Bancada dos agentes — {name}'],
+            '-AllowOverride', 'AcceptKeyEvents,AcceptPointerEvents',
+            '-rendernode', os.environ.get('AGENT_BENCH_RENDER_NODE', ''), '-desktop', f'Bancada dos agentes — {name}'],
             stdout=log, stderr=log)
         children.append(xvnc)
         for _ in range(150):
