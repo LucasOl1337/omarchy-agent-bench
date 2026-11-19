@@ -29,6 +29,7 @@ GC_DAYS = int(os.environ.get('AGENT_BENCH_GC_DAYS', '30'))
 NEVER_REAP = frozenset()
 # The only logged-in profile. Everything else gets a throwaway one.
 VAULT = 'cofre'
+PERSISTENT_PROFILES = frozenset((VAULT, 'dailywork-campanhas'))
 EPHEMERAL_MARK = '.efemero'
 CDP_PORT_BASE = 19000
 BLANK_URLS = ('about:blank', 'chrome://newtab/', 'chrome://new-tab-page/')
@@ -584,20 +585,16 @@ def require_bench_profile(state):
 
 
 def provide_bench_profile(state):
-    """Give a CDP bench its browser profile without copying anyone's identity.
-
-    Logged-in accounts live only in the vault, whose profile is never copied. Any
-    other bench gets an empty profile marked ephemeral, deleted when it stops.
-    Existing profiles, including the old seeded copies, are used as they are.
-    """
+    """Create the bench profile and preserve the shared login profiles."""
     state = Path(state)
     profile = state / 'chromium'
     if not profile.is_dir():
         profile.mkdir(parents=True, mode=0o700)
-        if state.name == VAULT:
-            (state / '.keep').write_text('cofre de contas do Lucas\n')
-        else:
+        if state.name not in PERSISTENT_PROFILES:
             (profile / EPHEMERAL_MARK).write_text('perfil descartável: apagado quando a bancada para\n')
+    if state.name in PERSISTENT_PROFILES:
+        (state / '.keep').touch(exist_ok=True)
+        (profile / EPHEMERAL_MARK).unlink(missing_ok=True)
     return profile
 
 
@@ -1073,7 +1070,7 @@ def close_browser(name, timeout=10):
                 break
             time.sleep(.1)
     removed = False
-    preserve = (RUNTIME / name / 'preserve-profile-on-stop').exists()
+    preserve = name in PERSISTENT_PROFILES or (RUNTIME / name / 'preserve-profile-on-stop').exists()
     if not preserve and (profile / EPHEMERAL_MARK).exists() and not _main_chromium_pids(profile):
         shutil.rmtree(profile, ignore_errors=True)
         removed = True

@@ -33,9 +33,10 @@ KEYS = {'Enter': ('Enter', 13), 'Tab': ('Tab', 9), 'Escape': ('Escape', 27),
         'ArrowLeft': ('ArrowLeft', 37), 'ArrowRight': ('ArrowRight', 39),
         'Home': ('Home', 36), 'End': ('End', 35), 'Space': ('Space', 32)}
 ACTIONS = ['open', 'tabs', 'popups', 'adopt', 'frames', 'observe', 'read', 'click', 'fill', 'upload', 'key', 'scroll',
-           'navigate', 'screenshot', 'close', 'hygiene', 'finish']
+           'navigate', 'screenshot', 'close', 'hygiene', 'finish', 'whatsapp-state']
 MAX_AGENT_TABS = 12
 MAX_MISSION_TABS = 2
+WHATSAPP_URL = 'https://web.whatsapp.com/'
 WEB_TOOL = {
     'name': 'bench_web',
     'description': ('Browser by mission inside an existing agent bench. Open registers an owned tab; '
@@ -88,6 +89,13 @@ def require_url(value):
     if value == 'about:blank' or (parsed.scheme in ('http', 'https') and parsed.hostname):
         return value
     raise WebError('url_invalid: use http/https or about:blank')
+
+
+def same_page(requested, existing):
+    if requested == WHATSAPP_URL:
+        parsed = urlparse(existing)
+        return parsed.scheme == 'https' and parsed.netloc == 'web.whatsapp.com'
+    return requested == existing
 
 
 def validate_location(bench, view, snap):
@@ -711,7 +719,11 @@ def run(args):
                 audit_event(bench, mission, action, 'requested', args.get('tab'))
                 if action == 'open':
                     live = page_targets(cdp.call('Target.getTargets')['targetInfos'])
-                    duplicate = any(t in live and live[t]['url'] == args.get('url') for t in state['tabs'])
+                    duplicate = any(t in live and same_page(args.get('url'), live[t]['url']) for t in state['tabs'])
+                    if args.get('url') == WHATSAPP_URL and any(
+                            tab not in state['tabs'] and same_page(WHATSAPP_URL, page['url'])
+                            for tab, page in live.items()):
+                        raise WebError('whatsapp_busy: o WhatsApp Web está aberto fora desta missão.')
                     # Unregistered tabs still consume resources. They cannot disappear
                     # from the quota just because an old driver lost their registry.
                     if len(live) >= MAX_AGENT_TABS and not duplicate:
@@ -778,6 +790,22 @@ def agent_tabs(bench, mission, identity, live):
     return used
 
 
+def whatsapp_state(call):
+    # Return session state without reading message content into the agent or logs.
+    expression = r"""(() => {
+      if (location.origin !== 'https://web.whatsapp.com') return 'wrong_origin';
+      const controls = [...document.querySelectorAll('button, [role="button"], a')]
+        .map(node => (node.innerText || node.getAttribute('aria-label') || '').trim());
+      if (controls.some(text => /^(use here|usar aqui)$/i.test(text))) return 'busy';
+      if (document.querySelector('#pane-side')) return 'paired';
+      if (controls.some(text => /^(link|log in) with phone number|^(conectar|entrar|vincular) com (o )?número/i.test(text))
+          || document.querySelector('canvas[aria-label*="QR"], [data-ref] canvas')) return 'pairing_required';
+      return 'loading';
+    })()"""
+    result = call('Runtime.evaluate', {'expression': expression, 'returnByValue': True})
+    return result.get('result', {}).get('value', 'loading')
+
+
 
 def operate(cdp, state, save, args):
     action = args['action']
@@ -814,7 +842,7 @@ def operate(cdp, state, save, args):
     if action == 'open':
         url = require_url(args['url'])
         own_live = [t for t in state['tabs'] if t in live]
-        same = next((t for t in own_live if live[t]['url'] == url), None)
+        same = next((t for t in own_live if same_page(url, live[t]['url'])), None)
         if same:
             return {'tab': same, 'reused': True, 'effect': 'unchanged', 'next': 'observe'}
         if len(own_live) >= MAX_MISSION_TABS:
@@ -837,6 +865,9 @@ def operate(cdp, state, save, args):
 
     def call(method, params=None):
         return cdp.call(method, params, session)
+
+    if action == 'whatsapp-state':
+        return {'tab': tab, 'state': whatsapp_state(call)}
 
     if action in ('open', 'navigate'):
         url = require_url(args['url'])

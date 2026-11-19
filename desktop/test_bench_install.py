@@ -205,7 +205,8 @@ print(json.dumps({'tools':[{'name':'click','description':'fixture native tool','
         self.assertEqual(0, first.returncode, first.stderr)
         sentinels = {}
         for relative in ('sessions/task/chromium/Default/sentinel', 'sessions/task/.keep',
-                         'browser-seed/chromium/Default/sentinel'):
+                         'browser-seed/chromium/Default/sentinel',
+                         'extensoes/nopecha/manifest.json', 'extensoes-padrao'):
             path = self.prefix / 'desktop' / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             data = b'fixture-persistent-state\x00@PREFIX@\xff'
@@ -216,6 +217,9 @@ print(json.dumps({'tools':[{'name':'click','description':'fixture native tool','
             source_data = self.source / 'desktop' / folder / 'must-not-distribute'
             source_data.parent.mkdir(parents=True, exist_ok=True)
             source_data.write_text('artificial profile fixture')
+        (self.source / 'desktop/extensoes').mkdir()
+        (self.source / 'desktop/extensoes/must-not-distribute').write_text('SDK fixture')
+        (self.source / 'desktop/extensoes-padrao').write_text('/fixture/source')
         result = self.install()
         self.assertEqual(0, result.returncode, result.stderr)
         for path, (data, inode) in sentinels.items():
@@ -223,7 +227,7 @@ print(json.dumps({'tools':[{'name':'click','description':'fixture native tool','
             self.assertEqual(data, path.read_bytes())
             self.assertEqual(inode, path.stat().st_ino)
             self.assertEqual(0o600, path.stat().st_mode & 0o777)
-        for folder in ('sessions', 'browser-seed'):
+        for folder in ('sessions', 'browser-seed', 'extensoes'):
             self.assertFalse((self.prefix / 'desktop' / folder / 'must-not-distribute').exists())
 
     def test_relative_prefix_creates_absolute_working_command_links(self):

@@ -248,11 +248,14 @@ def main():
     parser.add_argument('action', choices=['start', 'stop', 'status', 'list', 'exec', 'launch',
                         'browser', 'home', 'terminal', 'tools', 'doctor', 'screenshot', 'clipboard', 'view', 'mcp',
                         'collaborate', 'coop', 'resume', 'dock', 'ensure', 'cdp', 'browser-status', 'gc', 'keep', 'visit', 'close-here', 'fila',
-                        '_boot', '_serve', '_close-browser'])
+                        'whatsapp', '_boot', '_serve', '_close-browser'])
     parser.add_argument('name', nargs='?', default=None)
     parser.add_argument('args', nargs=argparse.REMAINDER)
     a = parser.parse_args()
     argv = a.args[1:] if a.args[:1] == ['--'] else a.args
+    if a.action == 'whatsapp':
+        from bench_whatsapp import main as whatsapp_main
+        return whatsapp_main([a.name, *argv] if a.name else argv)
     if a.action == 'gc':
         apply = a.name == '--apply' or '--apply' in a.args or '--apply' in argv
         print(json.dumps(gc_sessions(apply=apply), indent=2, ensure_ascii=False)); return 0

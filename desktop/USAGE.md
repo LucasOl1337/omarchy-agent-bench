@@ -109,6 +109,8 @@ pode encerrar seus filhos. Navegadores continuam pela rota `browser` validada.
 
 ## Navegador estruturado e aplicativos nativos
 
+Para WhatsApp Web, `agent-bench whatsapp MISSAO [--account CONTA]` abre uma aba da missão na bancada que tem o pareamento, inclusive em outra máquina. Use o host, a bancada e o ID da aba retornados para continuar no `agent-bench-web`. [Roteamento e pareamento](../docs/whatsapp-web.md).
+
 `agent-bench-web --bench NOME --mission MISSAO` e o MCP `bench_web` compartilham
 abas e referências por missão. Com o navegador preparado e validado na bancada:
 

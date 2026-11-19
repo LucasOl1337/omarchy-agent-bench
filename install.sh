@@ -53,7 +53,7 @@ if prefix.resolve() == root.resolve():
     raise SystemExit('Refusing to install into the source tree. Pick another --prefix.')
 
 prefix.mkdir(parents=True, exist_ok=True)
-persistent = ('sessions', 'browser-seed')
+persistent = ('sessions', 'browser-seed', 'extensoes', 'extensoes-padrao')
 
 def copy_code(src, dst):
     copied = shutil.copy2(src, dst)

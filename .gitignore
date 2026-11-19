@@ -3,5 +3,7 @@ __pycache__/
 *.bak.*
 .venv/
 desktop/sessions/
+desktop/extensoes/
+desktop/extensoes-padrao
 *.log
 .DS_Store
