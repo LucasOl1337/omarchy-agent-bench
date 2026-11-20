@@ -9,15 +9,18 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import re
 import stat
+import subprocess
 import time
+import unicodedata
 from urllib.parse import urlparse
 import uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from bench_control import control, views
-from bench_ops import bench_browser_snapshot, paths, request, valid
+from bench_ops import STATE, bench_browser_snapshot, ensure, paths, request, valid
 from bench_workspaces import AGENT_WORKSPACES, label as workspace_label
 
 ACTION_ROLES = frozenset(('button', 'link', 'textbox', 'searchbox', 'combobox',
@@ -47,7 +50,9 @@ WEB_TOOL = {
         'upload selects authorized local files in an observed file input; selection may trigger automatic transmission. '
         'frames discovers owned subframes; frame refs select same-session observe/read/click/fill only. OOPIF is unavailable. '
         'Input/navigation actions invalidate refs; a new observation replaces them. '
-        'Every call validates profile, workspace and human control. '
+        'Every call validates profile, workspace and human control; a stopped bench or browser with a prepared profile is started. '
+        'Names are normalized. A ref from the last observation stays usable for other controls of the same document; '
+        'a control already used needs a new observe. '
         'Reuse your tab with navigate; open refuses a third mission tab. hygiene reports unregistered pages. '
         'End with finish; keep_tabs requires reason and next_step for pending work. '
         'No Codex extension. Browser must already be prepared and running. '
@@ -76,12 +81,36 @@ WEB_TOOL = {
             'text_limit': {'type': 'integer', 'minimum': 1, 'maximum': 10000},
             'offset': {'type': 'integer', 'minimum': 0},
             'limit': {'type': 'integer', 'minimum': 1, 'maximum': 1000},
-            'output': {'type': 'string', 'description': 'New absolute PNG path for screenshot. With ref, the screenshot is clipped to that observed node (visible part).'}},
+            'output': {'type': 'string', 'description': 'Optional PNG path for screenshot (default: the bench capturas folder; never overwrites). With ref, the screenshot is clipped to that observed node (visible part).'}},
         'required': ['bench', 'mission', 'action']}}
 
 
 class WebError(RuntimeError):
-    pass
+    """Error with an optional structured diagnostic for the agent."""
+
+    def __init__(self, message, details=None):
+        super().__init__(message)
+        self.message = message
+        self.details = details or {}
+
+    def __str__(self):
+        if not self.details:
+            return self.message
+        return self.message + ' ' + json.dumps(self.details, ensure_ascii=False)
+
+
+SAME_FAILURE_LIMIT = 3
+SHOT_RETENTION_DAYS = 7
+TZ = ZoneInfo('America/Sao_Paulo')
+
+
+def normalize_name(raw, kind):
+    """Accept the names agents actually type: 'Cofre', 'Minha Missão', 'sfr_qa'."""
+    text = unicodedata.normalize('NFKD', str(raw or '')).encode('ascii', 'ignore').decode().casefold()
+    text = re.sub(r'-{2,}', '-', re.sub(r'[^a-z0-9-]+', '-', text)).strip('-')[:40].rstrip('-')
+    if not text:
+        raise WebError(f'name_invalid: {kind} precisa de letras ou números')
+    return valid(text)
 
 
 def require_url(value):
@@ -253,7 +282,10 @@ def coverage_identity(tree):
 
 
 def invalidate_refs(record):
-    # Retain old observations for comparison, never for mutation or cached read.
+    # Retain old observations for comparison; only the last one may lend refs
+    # back (recover_ref), never for cached read.
+    if record.get('latest_snapshot'):
+        record['recoverable'] = record['latest_snapshot']
     for key in ('frame', 'refs', 'latest_snapshot'):
         record.pop(key, None)
 
@@ -371,7 +403,7 @@ def observe(call, record, save, tab, tree, args):
     if 'query' in args:
         selection['query'] = args['query'].casefold()
     if args.get('region'):
-        region = resolve_ref(record, args['region'], tree)
+        region = resolve_ref(record, args['region'], tree, call)
         if not region.get('backend'):
             raise WebError('region_unstable: use read for this AX-only subtree or select a DOM-backed region')
         selection['region'] = region['id']
@@ -407,6 +439,8 @@ def observe(call, record, save, tab, tree, args):
         removable = next(s for s in record['snapshots'] if s['token'] not in (token, args.get('since')))
         record['snapshots'].remove(removable)
     record.update(frame=snapshot['frame'], refs=content['refs'], latest_snapshot=token)
+    for key in ('recoverable', 'used', 'pending'):
+        record.pop(key, None)
     return snapshot_response(tab, snapshot, selection, args, previous, reset)
 
 
@@ -448,16 +482,81 @@ def read_snapshot(record, tab, tree, args):
 
 def owned_tab(state, tab, live):
     if tab not in state['tabs']:
-        raise WebError('tab_not_owned: use open or tabs for this mission')
+        raise WebError('tab_not_owned: use open or tabs for this mission',
+                       {'own_tabs': [t for t in state['tabs'] if t in live]})
     if tab not in live or live[tab].get('type') != 'page':
         raise WebError('tab_closed: reconcile with tabs; do not adopt another tab')
     return state['tabs'][tab]
 
 
-def resolve_ref(record, ref, tree):
-    if record.get('frame') != frame_identity(tree) or ref not in record.get('refs', {}):
-        raise WebError('stale_ref: observe again before selecting an action')
-    return record['refs'][ref]
+def resolve_ref(record, ref, tree, call=None):
+    if record.get('frame') == frame_identity(tree) and ref in record.get('refs', {}):
+        return record['refs'][ref]
+    if call is not None:
+        recovered = recover_ref(record, ref, tree, call)
+        if recovered:
+            return recovered
+    raise WebError('stale_ref: observe again before selecting an action')
+
+
+def same_document(old, new):
+    # Backend node ids are stable inside one loaded document; pushState may change
+    # the URL (index 2) without replacing the document.
+    return bool(old) and old[:2] == new[:2] and old[3:] == new[3:]
+
+
+def node_connected(call, backend):
+    try:
+        obj = call('DOM.resolveNode', {'backendNodeId': backend})['object']['objectId']
+    except (WebError, KeyError, TypeError):
+        return False
+    try:
+        reply = call('Runtime.callFunctionOn', {'objectId': obj, 'returnByValue': True,
+                     'functionDeclaration': 'function(){return this.isConnected}'})
+        return reply.get('result', {}).get('value') is True
+    except WebError:
+        return False
+    finally:
+        try:
+            call('Runtime.releaseObject', {'objectId': obj})
+        except Exception:
+            pass
+
+
+def recover_ref(record, ref, tree, call):
+    """Reuse a ref from an earlier observation of this same document.
+
+    Covers the common fill-fill-click sequence without a new observe. Never after
+    an uncertain mutation, never for the control just used (that would be a repeat
+    send) and never across a navigation or inside a selected frame.
+    """
+    token = record.get('recoverable')
+    if ('_frame_scope' in tree or record.get('pending') or not token
+            or not isinstance(ref, str) or not ref.startswith(token + ':')):
+        return None
+    used = set(record.get('used', []))
+    snapshot = next((s for s in record.get('snapshots', []) if s.get('token') == token), None)
+    if not snapshot or not same_document(snapshot.get('frame'), frame_identity(tree)):
+        return None
+    entry = snapshot.get('refs', {}).get(ref)
+    item = next((i for i in snapshot.get('items', []) if i.get('ref') == ref), None)
+    if not entry or not item or not entry.get('backend'):
+        return None
+    if entry['backend'] in used:
+        return None  # The control was already used: a repeat must be a fresh decision.
+    if node_connected(call, entry['backend']):
+        return {**entry, 'recovered': 'same_node'}
+    if not item.get('name'):
+        return None
+    # The page re-rendered the control: accept one unique role+name match.
+    nodes = call('Accessibility.getFullAXTree').get('nodes', [])
+    matches = [n['backendDOMNodeId'] for n in nodes
+               if not n.get('ignored') and n.get('backendDOMNodeId')
+               and n.get('role', {}).get('value') == item['role']
+               and str(n.get('name', {}).get('value', '')) == item['name']]
+    if len(matches) != 1 or matches[0] in used:
+        return None
+    return {'backend': matches[0], 'role': item['role'], 'id': f'dom:{matches[0]}', 'recovered': 'rematched'}
 
 
 def index_targets(infos):
@@ -700,54 +799,122 @@ def upload_files(call, on_node, obj, files, expected, tree, tab):
 
 
 def run(args):
-    """Execute one bounded operation, holding the bench handoff gate throughout."""
+    """Execute one bounded operation, holding the bench handoff gate throughout.
+
+    Usage slips are fixed here instead of returned to the agent: names are
+    normalized and a stopped bench or browser with a prepared profile is started.
+    """
     os.umask(0o077)
-    bench, mission, action = valid(args['bench']), valid(args['mission']), args['action']
-    if action not in ACTIONS:
+    if args.get('action') not in ACTIONS:
         raise WebError('action_invalid')
-    # Never ensure/start a bench or silently select padrao here.
-    request(bench, {'action': 'status'}, timeout=3)
-    with control(bench):
-        view = views('status', bench)
-        if view.get('workspace') not in AGENT_WORKSPACES:
-            raise WebError('workspace_invalid: expected an agent workspace ' + workspace_label())
-        snap = bench_browser_snapshot(bench, include_pages=False)
-        validate_location(bench, view, snap)
-        cdp = CDP(snap['webSocketDebuggerUrl'])
-        try:
-            with mission_store(bench, mission, snap['webSocketDebuggerUrl']) as (state, save):
-                audit_event(bench, mission, action, 'requested', args.get('tab'))
-                if action == 'open':
-                    live = page_targets(cdp.call('Target.getTargets')['targetInfos'])
-                    duplicate = any(t in live and same_page(args.get('url'), live[t]['url']) for t in state['tabs'])
-                    if args.get('url') == WHATSAPP_URL and any(
-                            tab not in state['tabs'] and same_page(WHATSAPP_URL, page['url'])
-                            for tab, page in live.items()):
-                        raise WebError('whatsapp_busy: o WhatsApp Web está aberto fora desta missão.')
-                    # Unregistered tabs still consume resources. They cannot disappear
-                    # from the quota just because an old driver lost their registry.
-                    if len(live) >= MAX_AGENT_TABS and not duplicate:
-                        audit_event(bench, mission, action, 'tab_quota')
-                        raise WebError(f'tab_quota: {len(live)} pages already live in this browser '
-                                       f'(limit {MAX_AGENT_TABS}); close a finished tab of yours or checkpoint the next step')
-                if action == 'hygiene':
-                    live = page_targets(cdp.call('Target.getTargets')['targetInfos'])
-                    registered = agent_tabs(bench, mission, snap['webSocketDebuggerUrl'], live) | (set(state['tabs']) & live.keys())
-                    return {'pages': len(live), 'blank': sum(t['url'] == 'about:blank' for t in live.values()),
-                            'own_tabs': [t for t in state['tabs'] if t in live],
-                            'outside_web_registry': sorted(set(live) - registered),
-                            'mission_limit': MAX_MISSION_TABS, 'browser_limit': MAX_AGENT_TABS,
-                            'next': 'Close finished owned tabs; finish at mission end. Unknown owners require investigation, never automatic deletion.'}
-                try:
-                    result = operate(cdp, state, save, args)
-                except Exception:
-                    audit_event(bench, mission, action, 'error_reconcile', args.get('tab'), owned_tabs=list(state['tabs']))
-                    raise
-                audit_event(bench, mission, action, 'returned', result.get('tab'),
-                            closed=result.get('closed'), kept=result.get('kept'), reused=result.get('reused'))
-                return result
-        finally:
-            cdp.close()
+    notes = {}
+    for key in ('bench', 'mission'):
+        name = normalize_name(args.get(key), key)
+        if name != args.get(key):
+            notes.setdefault('normalized', {})[key] = name
+        args[key] = name
+    bench, mission, action = args['bench'], args['mission'], args['action']
+    try:
+        request(bench, {'action': 'status'}, timeout=3)
+    except (OSError, ValueError, RuntimeError):
+        revive(bench)
+        notes['started'] = 'bench'
+    for attempt in (1, 2):
+        with control(bench):
+            view = views('status', bench)
+            if view.get('workspace') not in AGENT_WORKSPACES:
+                raise WebError('workspace_invalid: expected an agent workspace ' + workspace_label())
+            snap = bench_browser_snapshot(bench, include_pages=False)
+            if snap.get('status') != 'fechado' or attempt == 2 or notes.get('started'):
+                validate_location(bench, view, snap)
+                return {**session(bench, mission, action, args, snap), **notes}
+        revive(bench)  # Outside control(): ensure takes it for the launch.
+        notes['started'] = 'browser'
+
+
+def revive(bench):
+    """Start a bench and its browser when the profile already exists; never create one."""
+    if not (paths(bench)[1] / 'chromium' / 'Default').is_dir():
+        known = sorted(STATE.glob('*/chromium/Default'), key=lambda p: p.stat().st_mtime, reverse=True)
+        raise WebError(f'bench_unprepared: {bench} has no prepared browser; use cofre or one of benches',
+                       {'benches': [p.parent.parent.name for p in known[:8]]})
+    try:
+        ensure(bench, browser=True)
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        raise WebError('bench_start_failed: ' + str(exc)) from exc
+
+
+def session(bench, mission, action, args, snap):
+    cdp = CDP(snap['webSocketDebuggerUrl'])
+    try:
+        with mission_store(bench, mission, snap['webSocketDebuggerUrl']) as (state, save):
+            audit_event(bench, mission, action, 'requested', args.get('tab'))
+            if action == 'open':
+                live = page_targets(cdp.call('Target.getTargets')['targetInfos'])
+                duplicate = any(t in live and same_page(args.get('url'), live[t]['url']) for t in state['tabs'])
+                if args.get('url') == WHATSAPP_URL and any(
+                        tab not in state['tabs'] and same_page(WHATSAPP_URL, page['url'])
+                        for tab, page in live.items()):
+                    raise WebError('whatsapp_busy: o WhatsApp Web está aberto fora desta missão.')
+                # Unregistered tabs still consume resources. They cannot disappear
+                # from the quota just because an old driver lost their registry.
+                if len(live) >= MAX_AGENT_TABS and not duplicate:
+                    audit_event(bench, mission, action, 'tab_quota')
+                    raise WebError(f'tab_quota: {len(live)} pages already live in this browser '
+                                   f'(limit {MAX_AGENT_TABS}); close a finished tab of yours or checkpoint the next step')
+            if action == 'hygiene':
+                live = page_targets(cdp.call('Target.getTargets')['targetInfos'])
+                registered = agent_tabs(bench, mission, snap['webSocketDebuggerUrl'], live) | (set(state['tabs']) & live.keys())
+                return {'pages': len(live), 'blank': sum(t['url'] == 'about:blank' for t in live.values()),
+                        'own_tabs': [t for t in state['tabs'] if t in live],
+                        'outside_web_registry': sorted(set(live) - registered),
+                        'mission_limit': MAX_MISSION_TABS, 'browser_limit': MAX_AGENT_TABS,
+                        'next': 'Close finished owned tabs; finish at mission end. Unknown owners require investigation, never automatic deletion.'}
+            try:
+                result = operate(cdp, state, save, args)
+            except Exception as exc:
+                audit_event(bench, mission, action, 'error_reconcile', args.get('tab'), owned_tabs=list(state['tabs']))
+                note_failure(cdp, state, args, exc)
+                raise
+            state.pop('failures', None)
+            record = state['tabs'].get(result.get('tab') or args.get('tab'))
+            if record is not None:
+                record.pop('pending', None)
+            if args.get('_ref_recovered'):
+                result['ref_recovered'] = args['_ref_recovered']
+            audit_event(bench, mission, action, 'returned', result.get('tab'),
+                        closed=result.get('closed'), kept=result.get('kept'), reused=result.get('reused'),
+                        ref_recovered=args.get('_ref_recovered'))
+            return result
+    finally:
+        cdp.close()
+
+
+def note_failure(cdp, state, args, exc):
+    """Count identical failures; the third one returns a diagnostic, not a block."""
+    code = str(getattr(exc, 'message', exc)).split(':', 1)[0][:60]
+    key = f"{args['action']}:{code}"
+    previous = state.get('failures') or {}
+    count = previous.get('n', 0) + 1 if previous.get('key') == key else 1
+    state['failures'] = {'key': key, 'n': count}
+    if count < SAME_FAILURE_LIMIT or not isinstance(exc, WebError):
+        return
+    diagnostic = {'same_failure': count, 'hint': (
+        'Mesma falha várias vezes seguidas: não repita igual. Veja a captura, faça observe '
+        'novo e mude a abordagem (outro elemento, rolar, fechar sobreposição ou visão nativa).')}
+    tab = args.get('tab')
+    try:
+        live = index_targets(cdp.call('Target.getTargets')['targetInfos'])
+        if tab in state['tabs'] and tab in live:
+            diagnostic['page'] = {'url': live[tab].get('url'), 'title': live[tab].get('title')}
+            session_id = cdp.call('Target.attachToTarget', {'targetId': tab, 'flatten': True})['sessionId']
+            image = cdp.call('Page.captureScreenshot', {'format': 'png'}, session_id)
+            stamp = datetime.now(TZ).strftime('%Y%m%d-%H%M%S')
+            path = shots_dir(args['bench']) / f"{args['mission']}-diagnostico-{stamp}.png"
+            diagnostic['screenshot'] = str(write_new(path, base64.b64decode(image['data'])))
+    except Exception:
+        pass  # The diagnostic is best effort; the original error still goes back.
+    exc.details = {**exc.details, 'diagnostic': diagnostic}
 
 
 def page_targets(infos):
@@ -854,6 +1021,9 @@ def operate(cdp, state, save, args):
         save()  # Register before navigation, including when the navigation fails.
     else:
         tab = args.get('tab')
+        own_live = [t for t in state['tabs'] if t in live and live[t].get('type') == 'page']
+        if not tab and len(own_live) == 1:
+            tab = args['tab'] = own_live[0]  # Forgotten tab id, only one possible.
         owned_tab(state, tab, live)
     record = state['tabs'][tab]
     if action == 'close':
@@ -894,14 +1064,12 @@ def operate(cdp, state, save, args):
     if action == 'read':
         return read_snapshot(record, tab, tree, args)
     if action == 'screenshot':
-        output = Path(args['output'])
-        if not output.is_absolute():
-            raise WebError('output_invalid: use a new absolute PNG path')
+        output = screenshot_target(args)
         params = {'format': 'png', 'captureBeyondViewport': False}
         if args.get('ref'):
             # Optional clip to an observed node's border box (page coordinates).
             # Without ref the capture is the viewport, exactly as before.
-            node = resolve_ref(record, args['ref'], tree)
+            node = resolve_ref(record, args['ref'], tree, call)
             if not node.get('backend'):
                 raise WebError('not_visible: this ref has no DOM node to clip')
             call('DOM.scrollIntoViewIfNeeded', {'backendNodeId': node['backend']})
@@ -919,12 +1087,13 @@ def operate(cdp, state, save, args):
             params['clip'] = {'x': max(min(xs), 0) + page_x, 'y': max(min(ys), 0) + page_y,
                               'width': width, 'height': height, 'scale': 1}
         image = call('Page.captureScreenshot', params)
-        with output.open('xb') as file:
-            file.write(base64.b64decode(image['data']))
+        output = write_new(output, base64.b64decode(image['data']))
         return {'tab': tab, 'path': str(output), **({'clip': params['clip']} if 'clip' in params else {})}
     node = None
     if action in ('click', 'fill', 'upload'):
-        node = resolve_ref(record, args.get('ref'), tree)
+        node = resolve_ref(record, args.get('ref'), tree, None if action == 'upload' else call)
+        if node.get('recovered'):
+            args['_ref_recovered'] = node['recovered']
         if not node.get('backend') or (action != 'upload' and node.get('role') not in ACTION_ROLES):
             raise WebError('not_actionable: this ref is for reading; choose an actionable control')
         if action == 'fill' and node['role'] not in ('textbox', 'searchbox', 'combobox', 'spinbutton'):
@@ -933,6 +1102,11 @@ def operate(cdp, state, save, args):
             files, expected_files = upload_paths(args.get('files'))
     # Invalidate before dispatch, including partial/error/uncertain outcomes.
     invalidate_refs(record)
+    # run() marks it done on a normal return; anything else stays pending and
+    # blocks ref recovery until a fresh observe.
+    record['pending'] = action
+    if node and node.get('backend'):
+        record['used'] = sorted(set(record.get('used', [])) | {node['backend']})
     save()
     if action in ('click', 'fill', 'upload'):
         obj = call('DOM.resolveNode', {'backendNodeId': node['backend']})['object']['objectId']
@@ -1002,6 +1176,49 @@ def operate(cdp, state, save, args):
     return {'tab': tab, 'effect': 'dispatched', 'next': 'observe'}
 
 
+def shots_dir(bench):
+    directory = paths(bench)[1] / 'capturas'
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    cutoff = time.time() - SHOT_RETENTION_DAYS * 86400
+    for old in directory.glob('*.png'):
+        try:
+            if old.stat().st_mtime < cutoff:
+                old.unlink()
+        except OSError:
+            pass
+    return directory
+
+
+def screenshot_target(args):
+    """Where a screenshot goes. Missing, relative, folder or taken paths are fixed, never refused."""
+    stamp = datetime.now(TZ).strftime('%Y%m%d-%H%M%S')
+    raw = str(args.get('output') or '').strip()
+    if not raw:
+        return shots_dir(args['bench']) / f"{args['mission']}-{stamp}.png"
+    path = Path(os.path.expanduser(raw))
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    if raw.endswith('/') or path.is_dir():
+        path = path / f"{args['mission']}-{stamp}.png"
+    elif path.suffix.casefold() != '.png':
+        path = path.with_name(path.name + '.png')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def write_new(path, data):
+    """Write without ever overwriting: a taken name gets -2, -3..."""
+    candidate, n = path, 2
+    while True:
+        try:
+            with candidate.open('xb') as file:
+                file.write(data)
+            return candidate
+        except FileExistsError:
+            candidate = path.with_name(f'{path.stem}-{n}{path.suffix}')
+            n += 1
+
+
 def send_key(call, key):
     if key not in KEYS:
         raise WebError('key_invalid')
@@ -1035,5 +1252,6 @@ def main():
         print(json.dumps({**result, 'elapsed_ms': round((time.monotonic() - started) * 1000)}, ensure_ascii=False))
         return 0
     except Exception as exc:
-        print(json.dumps({'error': str(exc), 'retry_mutation': False}, ensure_ascii=False))
+        print(json.dumps({'error': getattr(exc, 'message', str(exc)), **getattr(exc, 'details', {}),
+                          'retry_mutation': False}, ensure_ascii=False))
         return 1

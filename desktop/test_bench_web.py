@@ -85,8 +85,9 @@ class WebTests(unittest.TestCase):
         saved = []
         web.operate(cdp, state, lambda: saved.append(dict(state['tabs']['owned'])),
                     {'action': 'key', 'tab': 'owned', 'key': 'Escape'})
-        self.assertEqual(saved, [{}])
-        self.assertEqual(state['tabs']['owned'], {})
+        # Refs go before dispatch; the action stays pending until run() sees it return.
+        self.assertEqual(saved, [{'pending': 'key'}])
+        self.assertEqual(state['tabs']['owned'], {'pending': 'key'})
 
     def test_key_release_attempted_when_press_fails(self):
         calls = []

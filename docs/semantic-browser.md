@@ -9,8 +9,6 @@ use this interface; that is not a claim that every agent product was tested.
 ## Workflow
 
 ```sh
-agent-bench ensure demo
-agent-bench browser demo
 agent-bench-web --bench demo --mission report open --url https://example.org
 agent-bench-web --bench demo --mission report observe --tab TAB
 agent-bench-web --bench demo --mission report fill --tab TAB --ref REF --text 'Ação própria'
@@ -21,6 +19,29 @@ agent-bench-web --bench demo --mission report close --tab TAB
 ```
 
 TAB and REF are placeholders for actual results, never selectors to guess.
+
+## Usage slips the tool fixes itself
+
+These used to come back as errors and cost agents a retry each:
+
+- **Names.** `--bench Cofre --mission 'Minha Missão'` becomes `cofre` / `minha-missao`;
+  the result reports `normalized`.
+- **Stopped bench or browser.** When the bench already has a prepared profile, the
+  call starts the bench and/or its Chromium (`started: bench|browser`) and goes on.
+  A name without a prepared profile is never created: `bench_unprepared` lists the
+  benches that exist.
+- **Refs across steps.** After an action, refs from the last observation of the
+  *same document* stay usable for other controls (`ref_recovered: same_node`, or
+  `rematched` when the page re-rendered the control and exactly one node has the
+  same role and name). Never for a control already used since that observation,
+  never after a mutation that failed or is uncertain, never across navigation or
+  inside a selected frame: those still return `stale_ref` and need a new observe.
+  This keeps fill → fill → click cheap without opening a path to a repeated send.
+- **Forgotten `--tab`** with exactly one live tab in the mission uses that tab;
+  `tab_not_owned` lists `own_tabs`.
+- **Same failure three times in a row** (same action and error code) returns the
+  error with a `diagnostic`: page URL and title, a screenshot path and a hint to
+  change approach. Nothing is blocked.
 `observe` captures the accessible tree of the selected document (main frame by
 default) and returns text in
 tree order, roles, field values, control states and references. Each new capture
@@ -108,8 +129,10 @@ capture. Fresh scoped captures require a DOM-backed anchor; cached `read` can
 scope any observed ref.
 
 Other actions: `tabs`, `navigate --url URL`, `key --key Enter`, `scroll --dy 600`
-(optional x/y/dx), `screenshot --output /new/absolute/path.png`. Screenshots refuse
-to overwrite existing files. Use the harness's image viewer to inspect the PNG.
+(optional x/y/dx), `screenshot [--output PATH]`. Without `--output` the PNG goes to
+the bench's `capturas` folder (kept 7 days); relative paths, folders and missing
+parents are resolved, and a taken name gets `-2`, `-3`: screenshots never overwrite.
+The result's `path` is the file written. Use the harness's image viewer to inspect the PNG.
 For pixels and keys in native dialogs, canvas or drag, prefer `bench_exec` or
 `agent-bench exec NAME -- xdotool ...` on the bench's exclusive DISPLAY.
 AT-SPI remains available for supported semantic controls. Pixel CUA requires a
