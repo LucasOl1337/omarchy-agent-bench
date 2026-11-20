@@ -6,6 +6,7 @@ worker. Only a mission's own tabs and explicitly adopted children can be operate
 import base64
 from contextlib import contextmanager
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -20,7 +21,8 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from bench_control import control, views
-from bench_ops import STATE, bench_browser_snapshot, ensure, paths, request, valid
+from bench_ops import (PENDING_HOLD_SECONDS, STATE, bench_browser_snapshot, describe_origin, ensure,
+                       paths, request, valid)
 from bench_workspaces import AGENT_WORKSPACES, label as workspace_label
 
 ACTION_ROLES = frozenset(('button', 'link', 'textbox', 'searchbox', 'combobox',
@@ -100,6 +102,10 @@ class WebError(RuntimeError):
 
 
 SAME_FAILURE_LIMIT = 3
+SEND_WINDOW_SECONDS = 2 * 3600
+SEND_WORDS = re.compile(r'\b(enviar|envie|envio|send|submit|publicar|publique|publish|postar|post|tweet|'
+                        r'pagar|pague|pay|confirmar|confirme|confirm|finalizar|concluir|candidatar|'
+                        r'candidatura|apply|responder|reply|comprar|buy|assinar|compartilhar|share)\b', re.I)
 SHOT_RETENTION_DAYS = 7
 TZ = ZoneInfo('America/Sao_Paulo')
 
@@ -253,7 +259,7 @@ def collect_ax(nodes, token):
         if 'value' in n:
             item['value'] = '[protected]' if props.get('protected') else str(n['value'].get('value', ''))
         ref = f'{token}:{len(refs) + 1}'
-        refs[ref] = {'backend': backend, 'role': role, 'node': n['nodeId'], 'id': identity}
+        refs[ref] = {'backend': backend, 'role': role, 'node': n['nodeId'], 'id': identity, 'name': name[:80]}
         item.update(ref=ref, actionable=bool(backend and role in ACTION_ROLES))
         items.append(item)
     if sum(len(json.dumps(i, ensure_ascii=False)) for i in items) > MAX_SNAPSHOT_CHARS:
@@ -556,7 +562,8 @@ def recover_ref(record, ref, tree, call):
                and str(n.get('name', {}).get('value', '')) == item['name']]
     if len(matches) != 1 or matches[0] in used:
         return None
-    return {'backend': matches[0], 'role': item['role'], 'id': f'dom:{matches[0]}', 'recovered': 'rematched'}
+    return {'backend': matches[0], 'role': item['role'], 'id': f'dom:{matches[0]}', 'name': item['name'][:80],
+            'recovered': 'rematched'}
 
 
 def index_targets(infos):
@@ -849,6 +856,9 @@ def session(bench, mission, action, args, snap):
     try:
         with mission_store(bench, mission, snap['webSocketDebuggerUrl']) as (state, save):
             audit_event(bench, mission, action, 'requested', args.get('tab'))
+            driver = current_driver()
+            if action in ('open', 'hygiene'):
+                orphans = sweep_orphans(cdp, bench, mission, snap['webSocketDebuggerUrl'])
             if action == 'open':
                 live = page_targets(cdp.call('Target.getTargets')['targetInfos'])
                 duplicate = any(t in live and same_page(args.get('url'), live[t]['url']) for t in state['tabs'])
@@ -866,6 +876,7 @@ def session(bench, mission, action, args, snap):
                 live = page_targets(cdp.call('Target.getTargets')['targetInfos'])
                 registered = agent_tabs(bench, mission, snap['webSocketDebuggerUrl'], live) | (set(state['tabs']) & live.keys())
                 return {'pages': len(live), 'blank': sum(t['url'] == 'about:blank' for t in live.values()),
+                        **({'orphans_closed': len(orphans)} if orphans else {}),
                         'own_tabs': [t for t in state['tabs'] if t in live],
                         'outside_web_registry': sorted(set(live) - registered),
                         'mission_limit': MAX_MISSION_TABS, 'browser_limit': MAX_AGENT_TABS,
@@ -874,12 +885,26 @@ def session(bench, mission, action, args, snap):
                 result = operate(cdp, state, save, args)
             except Exception as exc:
                 audit_event(bench, mission, action, 'error_reconcile', args.get('tab'), owned_tabs=list(state['tabs']))
+                if args.get('_send'):
+                    note_send(bench, mission, args['_send'], 'incerto')
                 note_failure(cdp, state, args, exc)
                 raise
             state.pop('failures', None)
             record = state['tabs'].get(result.get('tab') or args.get('tab'))
             if record is not None:
                 record.pop('pending', None)
+                if driver:
+                    record['driver'] = driver
+            if args.get('_send'):
+                previous = note_send(bench, mission, args['_send'], result.get('effect', 'dispatched'))
+                if previous:
+                    result['repeat_send'] = previous
+            if action == 'observe' and result.get('url'):
+                sent = sends_here(bench, result['url'])
+                if sent:
+                    result['sent_here'] = sent
+            if action == 'open' and orphans:
+                result['orphans_closed'] = len(orphans)
             if args.get('_ref_recovered'):
                 result['ref_recovered'] = args['_ref_recovered']
             audit_event(bench, mission, action, 'returned', result.get('tab'),
@@ -888,6 +913,116 @@ def session(bench, mission, action, args, snap):
             return result
     finally:
         cdp.close()
+
+
+def proc_start(pid):
+    try:
+        return int((Path('/proc') / str(pid) / 'stat').read_text().rsplit(')', 1)[1].split()[19])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def current_driver():
+    """The harness process behind this call (pid + start time), or None when unknown."""
+    try:
+        origin = describe_origin(os.getpid()) or {}
+    except Exception:
+        return None
+    pid = origin.get('harness_pid')
+    start = proc_start(pid) if pid else None
+    return {'pid': pid, 'start': start, 'harness': origin.get('harness')} if start else None
+
+
+def driver_gone(driver):
+    # Unknown drivers (old records, harness not recognised) are never treated as dead.
+    if not isinstance(driver, dict) or not driver.get('pid') or not driver.get('start'):
+        return False
+    return proc_start(driver['pid']) != driver['start']
+
+
+def sweep_orphans(cdp, bench, mission, identity, now=None):
+    """Close tabs whose agent process died. Pending tabs inside the hold window stay.
+
+    Runs under web.lock. The caller's own mission file is skipped: it is open in
+    mission_store and its tabs can be resumed by the new process.
+    """
+    now = time.time() if now is None else now
+    live = index_targets(cdp.call('Target.getTargets')['targetInfos'])
+    closed = []
+    own = valid(mission) + '.json'
+    for path in (paths(bench)[1] / 'web-missions').glob('*.json'):
+        if path.name == own:
+            continue
+        try:
+            other = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if other.get('browser') != identity:
+            continue
+        changed = False
+        for tab, record in list((other.get('tabs') or {}).items()):
+            checkpoint = record.get('checkpoint') or {}
+            if checkpoint and now - checkpoint.get('at', now) < PENDING_HOLD_SECONDS:
+                continue
+            if not driver_gone(record.get('driver')):
+                continue
+            if tab in live and not cdp.call('Target.closeTarget', {'targetId': tab}).get('success'):
+                continue
+            del other['tabs'][tab]
+            closed.append(tab)
+            changed = True
+        if changed:
+            temp = path.with_suffix('.tmp')
+            temp.write_text(json.dumps(other, ensure_ascii=False))
+            temp.chmod(0o600)
+            temp.replace(path)
+            audit_event(bench, path.stem, 'orphan_close', 'returned', closed=closed)
+    return closed
+
+
+def page_key(url):
+    # Only a hash of origin+path is stored: no query strings, tokens or page text.
+    parsed = urlparse(url or '')
+    return hashlib.sha256(f'{parsed.scheme}://{parsed.netloc}{parsed.path}'.encode()).hexdigest()[:16]
+
+
+def load_sends(bench, now=None):
+    now = time.time() if now is None else now
+    try:
+        items = json.loads((paths(bench)[1] / 'envios.json').read_text())
+    except (OSError, ValueError):
+        return []
+    return [i for i in items if isinstance(i, dict) and now - i.get('at', 0) < SEND_WINDOW_SECONDS]
+
+
+def note_send(bench, mission, send, effect, now=None):
+    """Remember a send-like action; return the earlier same send on this page, if any.
+
+    A reminder, never a block: the next observe of the page lists it (sent_here).
+    """
+    now = time.time() if now is None else now
+    items = load_sends(bench, now)
+    key = page_key(send['url'])
+    previous = next((i for i in reversed(items) if i['page'] == key and i['control'] == send['control']), None)
+    items.append({'page': key, 'control': send['control'][:80], 'mission': mission, 'at': now, 'effect': effect})
+    path = paths(bench)[1] / 'envios.json'
+    temp = path.with_suffix('.tmp')
+    temp.write_text(json.dumps(items[-100:], ensure_ascii=False))
+    temp.chmod(0o600)
+    temp.replace(path)
+    return describe_send(previous, now) if previous else None
+
+
+def describe_send(item, now):
+    return {'control': item['control'], 'mission': item['mission'], 'effect': item['effect'],
+            'minutes_ago': round((now - item['at']) / 60, 1),
+            'at': datetime.fromtimestamp(item['at'], TZ).strftime('%H:%M')}
+
+
+def sends_here(bench, url, now=None):
+    now = time.time() if now is None else now
+    key = page_key(url)
+    return [describe_send(i, now) for i in load_sends(bench, now) if i['page'] == key][-5:]
 
 
 def note_failure(cdp, state, args, exc):
@@ -997,7 +1132,8 @@ def operate(cdp, state, save, args):
         closed = []
         for tab in list(state['tabs']):
             if tab in keep:
-                state['tabs'][tab]['checkpoint'] = {'reason': args['reason'], 'next_step': args['next_step']}
+                state['tabs'][tab]['checkpoint'] = {'reason': args['reason'], 'next_step': args['next_step'],
+                                                    'at': time.time()}
                 save()
                 continue
             if tab in live and not cdp.call('Target.closeTarget', {'targetId': tab}).get('success'):
@@ -1105,6 +1241,11 @@ def operate(cdp, state, save, args):
     # run() marks it done on a normal return; anything else stays pending and
     # blocks ref recovery until a fresh observe.
     record['pending'] = action
+    page_url = live.get(tab, {}).get('url', '')
+    if action == 'click' and node and SEND_WORDS.search(node.get('name') or ''):
+        args['_send'] = {'control': node['name'], 'url': page_url}
+    elif action == 'key' and args.get('key') == 'Enter':
+        args['_send'] = {'control': 'Enter', 'url': page_url}
     if node and node.get('backend'):
         record['used'] = sorted(set(record.get('used', [])) | {node['backend']})
     save()

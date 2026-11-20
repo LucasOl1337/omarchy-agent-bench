@@ -42,6 +42,24 @@ These used to come back as errors and cost agents a retry each:
 - **Same failure three times in a row** (same action and error code) returns the
   error with a `diagnostic`: page URL and title, a screenshot path and a hint to
   change approach. Nothing is blocked.
+
+## Pending tabs, orphan tabs and repeated sends
+
+- **Pending tab holds the bench.** `finish --keep-tab TAB --reason R --next-step N`
+  stamps the checkpoint; for 24 h (`AGENT_BENCH_PENDING_HOLD_SECONDS`) the idle
+  reaper leaves that bench alone and the Omarchy bar tooltip shows
+  `pendente: R`. Checkpoints without a timestamp (older versions) do not hold.
+- **Orphan tabs close.** Every successful call records the harness process
+  behind the tab (pid + start time, from the process tree). On `open` and
+  `hygiene`, tabs of *other* missions in the same browser whose harness process
+  is gone are closed, unless they are pending inside the hold window. A tab with
+  an unknown harness is never closed by this rule.
+- **Repeated-send reminder, never a block.** A click on a control named like a
+  send (Enviar, Publicar, Pagar, Confirmar, Candidatar, Send, Submit, Post…) or
+  `key Enter` is remembered per bench for 2 h, keyed only by a hash of the
+  page origin+path. The next `observe` of that page returns `sent_here`
+  (control, mission, minutes ago, `dispatched` or `incerto`), and a click that
+  repeats one returns `repeat_send`. No URL, query or page text is stored.
 `observe` captures the accessible tree of the selected document (main frame by
 default) and returns text in
 tree order, roles, field values, control states and references. Each new capture

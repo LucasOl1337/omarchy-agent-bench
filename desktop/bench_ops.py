@@ -937,6 +937,33 @@ def native_job_present(name):
         return True
 
 
+PENDING_HOLD_SECONDS = int(os.environ.get('AGENT_BENCH_PENDING_HOLD_SECONDS', str(24 * 3600)))
+
+
+def pending_checkpoints(name, now=None):
+    """Tabs kept at finish with reason and next step, still inside the hold window.
+
+    They keep the bench from being reaped (a half-filled form must not vanish) and
+    are shown on the bar. Checkpoints without a timestamp predate the hold and do
+    not count, so an old record cannot hold a bench forever.
+    """
+    now = time.time() if now is None else now
+    found = []
+    for path in (STATE / name / 'web-missions').glob('*.json'):
+        try:
+            state = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        for tab, record in (state.get('tabs') or {}).items():
+            checkpoint = record.get('checkpoint') if isinstance(record, dict) else None
+            at = checkpoint.get('at') if isinstance(checkpoint, dict) else None
+            if isinstance(at, (int, float)) and now - at < PENDING_HOLD_SECONDS:
+                found.append({'mission': path.stem, 'tab': tab, 'at': at,
+                              'reason': str(checkpoint.get('reason', ''))[:200],
+                              'next_step': str(checkpoint.get('next_step', ''))[:200]})
+    return sorted(found, key=lambda item: item['at'], reverse=True)
+
+
 def should_reap(name, now=None, check_input=True):
     if name in NEVER_REAP:
         return False
@@ -954,6 +981,8 @@ def should_reap(name, now=None, check_input=True):
     seen = last_activity(name)
     now = time.time() if now is None else now
     if seen is None or now - seen < IDLE_SECONDS:
+        return False
+    if pending_checkpoints(name, now):
         return False
     if cdp_client_connected(name):
         return False

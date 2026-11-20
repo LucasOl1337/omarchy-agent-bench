@@ -112,7 +112,14 @@ def bar_state(now=None):
             kind = 'persistente'  # an old copy of the seed
         else:
             kind = 'descartavel'
+        from bench_ops import pending_checkpoints
+        try:
+            pending = pending_checkpoints(name, now)
+        except OSError:
+            pending = []
         benches[name] = {'workspace': entry.get('workspace'), 'owner': owner,
+                         **({'pending': {'count': len(pending), 'reason': pending[0]['reason'][:120],
+                                         'mission': pending[0]['mission']}} if pending else {}),
                          'active': idle is not None and idle < 60, 'idle_seconds': idle,
                          'human': (runtime / 'human-control').exists(),
                          'coop': (runtime / 'human-coop').exists(), 'kind': kind}
