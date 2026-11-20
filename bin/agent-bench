@@ -23,6 +23,7 @@ from bench_ops import (RUNTIME, STATE, cdp_snapshot, claim_owner, ensure,
                        gc_sessions, keep_session, load_owner, open_browser, paths, record_origin, request, start,
                        touch_activity, valid, wait_cdp, bench_browser_snapshot, stop, close_browser)
 from bench_workspaces import browser_scale
+from bench_versao import installed_version
 DROP = ('DISPLAY', 'WAYLAND_DISPLAY', 'WAYLAND_SOCKET', 'XAUTHORITY',
         'HYPRLAND_INSTANCE_SIGNATURE', 'DBUS_SESSION_BUS_ADDRESS',
         'DBUS_STARTER_ADDRESS', 'DBUS_STARTER_BUS_TYPE', 'AT_SPI_BUS_ADDRESS',
@@ -38,6 +39,84 @@ def clean_env():
         env.pop(key, None)
     return env
 
+GLVND = Path('/usr/share/glvnd/egl_vendor.d/50_mesa.json')
+VULKAN = Path('/usr/share/vulkan/icd.d')
+# Lucas's session forces NVIDIA for everything (LIBVA, Vulkan, GLX). Benches
+# inherited it and each Chromium held ~90-137 MiB on the RTX 4070 even in
+# software mode (20/11/2026). Never on the discrete card he games on.
+NVIDIA_ENV = ('NVD_BACKEND', 'VK_LOADER_DRIVERS_DISABLE', '__GL_SHADER_DISK_CACHE',
+              '__GL_SHADER_DISK_CACHE_SKIP_CLEANUP', '__GL_SHADER_DISK_CACHE_SIZE')
+INTEGRATED_VRAM_MAX = 4 << 30
+
+
+def render_node(env):
+    """The integrated GPU's render node, or '' for software rendering.
+
+    AGENT_BENCH_RENDER_NODE wins: a path, or 'software'/'' to turn it off.
+    Otherwise the first AMD APU (small VRAM carve-out) or Intel iGPU; never NVIDIA.
+    On the PC the Radeon 610M ran a WebGL page at 62 fps with 46% of a core,
+    against 17 fps and 110% in software (20/11/2026).
+    """
+    chosen = env.get('AGENT_BENCH_RENDER_NODE')
+    if chosen is not None:
+        return '' if chosen in ('', 'software') else chosen
+    for node in sorted(Path('/sys/class/drm').glob('renderD*')):
+        try:
+            driver = (node / 'device' / 'driver').resolve().name
+            if driver == 'amdgpu':
+                if int((node / 'device' / 'mem_info_vram_total').read_text()) > INTEGRATED_VRAM_MAX:
+                    continue
+            elif driver not in ('i915', 'xe'):
+                continue
+        except (OSError, ValueError):
+            continue
+        device = Path('/dev/dri') / node.name
+        if os.access(device, os.R_OK | os.W_OK):
+            return str(device)
+    return ''
+
+
+def gpu_env(env):
+    """Bench-wide GL: the integrated GPU through Xvnc's DRI3, or software.
+
+    Only GL changes for the whole bench (NVIDIA's GLX cannot drive Xvnc anyway).
+    Vulkan and VA-API stay inherited so a native app (Unreal, Blender) can still
+    use the discrete card under the heavy-work queue; see browser_env.
+    """
+    node = render_node(env)
+    env['AGENT_BENCH_RENDER_NODE'] = node
+    env['__GLX_VENDOR_LIBRARY_NAME'] = 'mesa'
+    env['LIBGL_ALWAYS_SOFTWARE'] = '0' if node else '1'
+    return env
+
+
+def browser_env(base):
+    """Chromium never touches the discrete card: Vulkan, VA-API and EGL go to the
+    integrated GPU (or software). Software mode held 90-137 MiB of the 4070 per bench."""
+    env = dict(base)
+    node = env.get('AGENT_BENCH_RENDER_NODE') or ''
+    for key in NVIDIA_ENV:
+        env.pop(key, None)
+    if GLVND.exists():
+        env['__EGL_VENDOR_LIBRARY_FILENAMES'] = str(GLVND)
+    icd = VULKAN / 'lvp_icd.json'
+    if node:
+        try:
+            driver = (Path('/sys/class/drm') / Path(node).name / 'device' / 'driver').resolve().name
+        except OSError:
+            driver = ''
+        icd = VULKAN / ('radeon_icd.json' if driver == 'amdgpu' else 'intel_icd.json')
+        env['LIBVA_DRIVER_NAME'] = 'radeonsi' if driver == 'amdgpu' else 'iHD'
+    else:
+        env.pop('LIBVA_DRIVER_NAME', None)
+    if icd.exists():
+        env['VK_DRIVER_FILES'] = env['VK_ICD_FILENAMES'] = str(icd)
+    else:
+        env.pop('VK_DRIVER_FILES', None)
+        env.pop('VK_ICD_FILENAMES', None)
+    return env
+
+
 def boot(name):
     runtime, state = paths(name)
     for p in (runtime, state, runtime / 'run', state / 'config', state / 'cache', state / 'data', state / 'state'):
@@ -50,9 +129,10 @@ def boot(name):
                XDG_CACHE_HOME=str(state / 'cache'), XDG_DATA_HOME=str(state / 'data'),
                XDG_STATE_HOME=str(state / 'state'), XDG_SESSION_TYPE='x11',
                XDG_CURRENT_DESKTOP='Openbox', GDK_BACKEND='x11', QT_QPA_PLATFORM='xcb',
-               GTK_USE_PORTAL='0', LIBGL_ALWAYS_SOFTWARE='0' if env.get('AGENT_BENCH_RENDER_NODE') else '1',
+               GTK_USE_PORTAL='0',
                # The private session bus has no systemd manager for broker activation.
                ATSPI_DBUS_IMPLEMENTATION='dbus-daemon')
+    gpu_env(env)
     os.execve('/usr/bin/dbus-run-session', ['dbus-run-session', '--', str(Path(__file__).resolve()), '_serve', name], env)
 
 def cgroup_tasks():
@@ -110,6 +190,7 @@ def serve(name):
     env = {k: os.environ[k] for k in ENV_KEYS if k in os.environ}
     info = {'name': name, 'protocol_version': 2, 'display': display, 'geometry': '1600x1000', 'server_pid': xvnc.pid,
             'browser_scale': os.environ.get('AGENT_BENCH_BROWSER_SCALE'),
+            'gpu': os.environ.get('AGENT_BENCH_RENDER_NODE') or 'software', 'version': installed_version(),
             'viewer_socket': str(view), 'clipboard_bridge': False, 'physical_input': False,
             'state': str(state), 'env': env, 'owner': (load_owner(name).get('owner') or claim_owner(name, 'systemd')['owner'])}
     (runtime / 'session.json').write_text(json.dumps(info, indent=2) + '\n')
@@ -189,7 +270,9 @@ def serve(name):
                     cwd = q.get('cwd', str(state))
                     with control(name), action_lock:
                         if action == 'launch':
-                            child = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+                            child_env = browser_env(os.environ) if Path(cmd[0]).name in ('chromium', 'chromium-browser') else None
+                            child = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                                                     env=child_env)
                             children.append(child)
                             result = {'pid': child.pid, 'display': display, 'name': name}
                         else:
@@ -248,7 +331,7 @@ def main():
     parser.add_argument('action', choices=['start', 'stop', 'status', 'list', 'exec', 'launch',
                         'browser', 'home', 'terminal', 'tools', 'doctor', 'screenshot', 'clipboard', 'view', 'mcp',
                         'collaborate', 'coop', 'resume', 'dock', 'ensure', 'cdp', 'browser-status', 'gc', 'keep', 'visit', 'close-here', 'fila',
-                        'whatsapp', '_boot', '_serve', '_close-browser'])
+                        'whatsapp', 'update', 'versao', '_boot', '_serve', '_close-browser'])
     parser.add_argument('name', nargs='?', default=None)
     parser.add_argument('args', nargs=argparse.REMAINDER)
     a = parser.parse_args()
@@ -274,6 +357,28 @@ def main():
             if not cmd: raise ValueError('Use: agent-bench fila NOME rodar -- COMANDO')
             return bench_fila.rodar(a.name, cmd)
         raise ValueError('Use: agent-bench fila [NOME entrar MOTIVO | sair | rodar -- CMD]')
+    if a.action == 'update':
+        from bench_versao import update
+        opts = [a.name, *a.args] if a.name else list(a.args)
+        ref = next((o for o in opts if not o.startswith('--')), 'origin/main')
+        repo = next((o.split('=', 1)[1] for o in opts if o.startswith('--repo=')), None)
+        result = update(ref, repo=repo, force='--force' in opts)
+        if '--sem-reiniciar' not in opts:
+            subprocess.run(['systemctl', '--user', 'restart', 'agent-bench-views.service'], check=False)
+            result['supervisor'] = 'reiniciado'
+        print(json.dumps(result, indent=2, ensure_ascii=False)); return 0
+    if a.action == 'versao':
+        from bench_versao import report
+        benches = []
+        for sock in sorted(RUNTIME.glob('*/control.sock')):
+            try:
+                info = request(sock.parent.name, {'action': 'status'}, timeout=2)
+                benches.append({'name': sock.parent.name, 'version': info.get('version'), 'gpu': info.get('gpu')})
+            except (OSError, ValueError, RuntimeError):
+                continue
+        result = report(benches)
+        result['gpu'] = {b['name']: b.get('gpu') for b in benches}
+        print(json.dumps(result, indent=2, ensure_ascii=False)); return 0 if not result['hand_edits'] else 1
     if a.action == 'close-here':
         from bench_human import close_here
         print(json.dumps(close_here(), indent=2)); return 0

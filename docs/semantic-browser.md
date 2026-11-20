@@ -430,3 +430,30 @@ f5 livre
   reopens the browser. The cofre is never reaped.
 - `stop`/`bench_stop`/Super+W on a fixed bench close only its Chromium and free
   it; on the cofre nothing closes. Other benches stop as before.
+
+## GPU, heavy-work queue and versioned install (v2, etapa 6)
+
+- **GPU:** each bench renders GL on the integrated GPU through Xvnc's DRI3
+  (`-rendernode`): the first AMD APU (VRAM carve-out up to 4 GiB) or Intel iGPU,
+  never NVIDIA. `AGENT_BENCH_RENDER_NODE=software` (or a path) overrides it.
+  Chromium also gets Vulkan, VA-API and EGL pinned to that GPU (or software),
+  because the user session forces NVIDIA and every bench Chromium held
+  90-137 MiB of the RTX 4070. Native apps keep the inherited Vulkan, so Unreal
+  can still use the discrete card under the queue. Measured on the PC: a WebGL
+  page ran at 62 fps with 46% of a core on the Radeon 610M, 17 fps with 110% in
+  software. `agent-bench status NAME` reports `gpu`.
+- **Queue enters by itself:** every minute the supervisor puts a bench running
+  heavy native work (a process holding `/dev/nvidia*`, or ffmpeg, Blender, OBS,
+  Unreal, Godot, gst-launch, wf-recorder) in the queue without blocking it, and
+  releases that automatic slot when the work ends. Slots taken by an agent
+  (`fila entrar/rodar`) are left alone. Without NVIDIA the queue reads the
+  Radeon's VRAM: 1 slot, a quarter of the VRAM free.
+- **Versioned install:** `agent-bench update [REF] [--repo=PATH] [--force]
+  [--sem-reiniciar]` copies the tracked `bin/` and `desktop/` files of a commit
+  (default `origin/main` of `~/Projects/omarchy-agent-bench`, or
+  `AGENT_BENCH_REPO`) into the install, writes `desktop/VERSAO.json` and restarts
+  the supervisor. It refuses when an installed file changed since the last
+  update (`INSTALACAO_REMENDADA`); `--force` keeps a copy in `.versoes/` first.
+  Sessions, profiles and untracked local files are not touched.
+  `agent-bench versao` shows the installed commit, hand edits, and each open
+  bench's version and GPU (`stale` lists benches still on older code).

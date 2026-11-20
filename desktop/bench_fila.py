@@ -22,9 +22,16 @@ from pathlib import Path
 from bench_ops import RUNTIME, USER_RUNTIME_ROOT, systemd_env, valid
 
 FILE = Path.home() / '.local/state/agent-bench/fila.json'
-VAGAS = int(os.environ.get('AGENT_BENCH_VAGAS_PESADAS', '2'))
+DRM = Path('/sys/class/drm')
 # Vaga extra só entra se sobrar VRAM: duas Unreal + o jogo do humano esgotaram 16 GB em 16/10.
-VRAM_LIVRE_MIN = int(os.environ.get('AGENT_BENCH_VRAM_LIVRE_MIN', '9000'))
+# Sem NVIDIA (notebook, Radeon com 2 GiB) a regra de 9 GB não serve: 1 vaga só e um quarto da
+# VRAM livre; carga pesada de verdade vai para o PC (decisão do Lucas, 19/11/2026).
+VAGAS = int(os.environ['AGENT_BENCH_VAGAS_PESADAS']) if os.environ.get('AGENT_BENCH_VAGAS_PESADAS') else None
+VRAM_LIVRE_MIN = (int(os.environ['AGENT_BENCH_VRAM_LIVRE_MIN'])
+                  if os.environ.get('AGENT_BENCH_VRAM_LIVRE_MIN') else None)
+# Executáveis que são carga pesada mesmo sem segurar a GPU discreta.
+PESADOS = frozenset({'ffmpeg', 'blender', 'obs', 'UnrealEditor', 'UnrealEditor-Cmd', 'UnrealEditor-Linux',
+                     'gst-launch-1.0', 'godot', 'wf-recorder'})
 SUBIDA_S = int(os.environ.get('AGENT_BENCH_VAGA_SUBIDA_S', '150'))
 TTL = int(os.environ.get('AGENT_BENCH_VAGA_TTL', str(20 * 60)))
 ESPERA_TTL = 90
@@ -96,7 +103,7 @@ def _jogando():
     return jogos
 
 
-def _vram_livre():
+def _vram_nvidia():
     try:
         out = subprocess.run(['nvidia-smi', '--query-gpu=memory.free', '--format=csv,noheader,nounits'],
                              capture_output=True, text=True, timeout=5).stdout
@@ -105,17 +112,56 @@ def _vram_livre():
         return None
 
 
+def _vram_amd():
+    """(livre, total) em MiB da maior Radeon, ou None."""
+    melhor = None
+    for card in DRM.glob('card[0-9]*'):
+        try:
+            total = int((card / 'device/mem_info_vram_total').read_text())
+            usado = int((card / 'device/mem_info_vram_used').read_text())
+        except (OSError, ValueError):
+            continue
+        if melhor is None or total > melhor[1]:
+            melhor = ((total - usado) >> 20, total >> 20)
+    return melhor
+
+
+def _gpu():
+    """Tipo da GPU medida, VRAM livre (MiB) e os limites desta máquina."""
+    livre = _vram_nvidia()
+    tipo, total = ('nvidia', None) if livre is not None else (None, None)
+    if livre is None:
+        amd = _vram_amd()
+        if amd is not None:
+            (livre, total), tipo = amd, 'amd'
+    vagas = VAGAS if VAGAS is not None else (1 if tipo == 'amd' else 2)
+    minimo = VRAM_LIVRE_MIN if VRAM_LIVRE_MIN is not None else (total // 4 if tipo == 'amd' else 9000)
+    return {'tipo': tipo, 'livre': livre, 'vagas': vagas, 'minimo': minimo}
+
+
+def _vram_livre():
+    return _gpu()['livre']
+
+
+def _limites():
+    gpu = _gpu() if VAGAS is None or VRAM_LIVRE_MIN is None else {'tipo': None}
+    vagas = VAGAS if VAGAS is not None else gpu['vagas']
+    minimo = VRAM_LIVRE_MIN if VRAM_LIVRE_MIN is not None else gpu['minimo']
+    return vagas, minimo
+
+
 def _motivo_capacidade(st):
-    if len(st['vagas']) >= VAGAS:
-        return {'codigo': 'vagas_ocupadas', 'texto': f'{VAGAS} vagas pesadas ocupadas'}
+    vagas, minimo = _limites()
+    if len(st['vagas']) >= vagas:
+        return {'codigo': 'vagas_ocupadas', 'texto': f'{vagas} vagas pesadas ocupadas'}
     # A VRAM da vaga recém-dada só aparece quando a Unreal dela carrega: espera ela subir.
     if st['vagas'] and time.time() - max(v['desde'] for v in st['vagas']) < SUBIDA_S:
         return {'codigo': 'subida_da_ultima_vaga', 'texto': 'aguardando a carga da última vaga'}
     # Vale até pra primeira vaga: Unreal lançada fora da fila também ocupa VRAM.
     livre = _vram_livre()
-    if livre is not None and livre < VRAM_LIVRE_MIN:
-        return {'codigo': 'vram_insuficiente', 'texto': f'VRAM livre {livre} MiB; mínimo {VRAM_LIVRE_MIN} MiB',
-                'vram_livre_mib': livre, 'vram_livre_min': VRAM_LIVRE_MIN}
+    if livre is not None and livre < minimo:
+        return {'codigo': 'vram_insuficiente', 'texto': f'VRAM livre {livre} MiB; mínimo {minimo} MiB',
+                'vram_livre_mib': livre, 'vram_livre_min': minimo}
     return None
 
 
@@ -140,8 +186,10 @@ def _com_cota(st, bench, resposta):
     return resposta
 
 
-def entrar(bench, motivo='', timeout=None):
-    """Bloqueia até a bancada ganhar vaga pesada. Chamar de novo renova a vaga."""
+def entrar(bench, motivo='', timeout=None, auto=False, quieto=False):
+    """Bloqueia até a bancada ganhar vaga pesada. Chamar de novo renova a vaga.
+
+    auto=True marca a entrada feita pelo supervisor, que também a solta sozinho."""
     bench, inicio, ultima = valid(bench), time.time(), None
     while True:
         agora = time.time()
@@ -162,17 +210,19 @@ def entrar(bench, motivo='', timeout=None):
                 bloqueio = _motivo_capacidade(st)
             if bloqueio is None:
                 st['espera'] = [e for e in st['espera'] if e['bench'] != bench]
-                vaga = {'bench': bench, 'motivo': motivo, 'desde': agora, 'renovado': agora}
+                vaga = {'bench': bench, 'motivo': motivo, 'desde': agora, 'renovado': agora,
+                        **({'auto': True} if auto else {})}
                 st['vagas'].append(vaga)
                 return _com_cota(st, bench, {'status': 'com vaga', **vaga, 'expira_em_s': TTL})
             item = next((e for e in st['espera'] if e['bench'] == bench), None)
             if item: item['visto'] = agora
-            else: st['espera'].append({'bench': bench, 'motivo': motivo, 'desde': agora, 'visto': agora})
+            else: st['espera'].append({'bench': bench, 'motivo': motivo, 'desde': agora, 'visto': agora,
+                                       **({'auto': True} if auto else {})})
             posicao = [e['bench'] for e in st['espera']].index(bench) + 1
             ocupada = ', '.join([f'humano jogando {j}' for j in jogos]
                                 + [f"{v['bench']} ({v['motivo'] or 'sem motivo'})" for v in st['vagas']])
         estado = (posicao, bloqueio['codigo'])
-        if estado != ultima:
+        if estado != ultima and not quieto:
             ocupantes = f'; vaga com {ocupada}' if ocupada else ''
             print(f"agent-bench fila: {bench} esperando, posição {posicao}; {bloqueio['texto']}{ocupantes}",
                   file=sys.stderr, flush=True)
@@ -198,7 +248,8 @@ def promover(st, agora):
     dados = []
     while st['espera'] and not _jogando() and _cabe_mais(st):
         e = st['espera'].pop(0)
-        vaga = {'bench': e['bench'], 'motivo': e['motivo'], 'desde': agora, 'renovado': agora}
+        vaga = {'bench': e['bench'], 'motivo': e['motivo'], 'desde': agora, 'renovado': agora,
+                **({'auto': True} if e.get('auto') else {})}
         try: _cota(e['bench'], True)
         except CotaErro as exc:
             # Volta pra frente da fila: a própria bancada vai ver o erro ao chamar entrar().
@@ -212,7 +263,8 @@ def status():
     with _estado() as st:
         _limpar(st, time.time())
         promover(st, time.time())
-        return {'vagas_pesadas': VAGAS, 'vram_livre_mib': _vram_livre(), 'vram_livre_min': VRAM_LIVRE_MIN,
+        vagas, minimo = _limites()
+        return {'vagas_pesadas': vagas, 'vram_livre_mib': _vram_livre(), 'vram_livre_min': minimo,
                 'ttl_s': TTL, 'humano_jogando': _jogando(),
                 'vagas': st['vagas'], 'espera': st['espera']}
 
@@ -230,3 +282,50 @@ def rodar(bench, argv, motivo=''):
                 try: entrar(bench, motivo)
                 except CotaErro as exc: print(exc, file=sys.stderr, flush=True)
     finally: sair(bench)
+
+
+def pesados(bench):
+    """Executáveis de carga pesada na bancada: usam a GPU discreta ou estão em PESADOS.
+
+    Só olha processos nativos (fora a infraestrutura e o Chromium da bancada)."""
+    from bench_ops import BENCH_INFRA, PROC, _bench_cgroup, _cgroup_pids, request
+    info = request(bench, {'action': 'status'}, timeout=2)
+    achados = []
+    for pid in _cgroup_pids(_bench_cgroup(int(info['server_pid']), bench)):
+        proc = PROC / str(pid)
+        try:
+            comm = (proc / 'comm').read_text().strip()
+            if comm in BENCH_INFRA:
+                continue
+            nvidia = any(os.readlink(fd).startswith('/dev/nvidia') for fd in (proc / 'fd').iterdir())
+        except OSError:
+            continue
+        if (nvidia or comm in PESADOS) and comm not in achados:
+            achados.append(comm)
+    return achados
+
+
+def automatico():
+    """Põe na fila, sem bloquear, a bancada que roda carga pesada e solta quando ela acaba.
+
+    Decisão do Lucas (19/11/2026): a fila entra sozinha. Vaga pedida por agente
+    (fila entrar/rodar) é dele e não é tocada aqui."""
+    with _estado() as st:
+        marcadas = {row['bench']: bool(row.get('auto')) for row in st['vagas'] + st['espera']}
+    mudou = []
+    for sock in sorted(RUNTIME.glob('*/control.sock')):
+        bench = sock.parent.name
+        try:
+            achados = pesados(bench)
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+            continue
+        if achados and marcadas.get(bench) is not False:
+            try:
+                r = entrar(bench, 'automático: ' + ', '.join(achados[:3]), timeout=0, auto=True, quieto=True)
+            except CotaErro as exc:
+                print(exc, file=sys.stderr, flush=True); continue
+            if bench not in marcadas:
+                mudou.append(f"{bench}: {r['status']}")
+        elif not achados and marcadas.get(bench):
+            sair(bench); mudou.append(f'{bench}: liberada')
+    return mudou

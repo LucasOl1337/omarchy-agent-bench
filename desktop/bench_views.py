@@ -441,6 +441,13 @@ def main():
                         print('agent-bench-views reap:', ','.join(stopped), flush=True)
                 except Exception as exc:
                     print('agent-bench-views reap:', exc, flush=True)
+                try:
+                    from bench_fila import automatico
+                    changed = automatico()
+                    if changed:
+                        print('agent-bench-views fila:', '; '.join(changed), flush=True)
+                except Exception as exc:
+                    print('agent-bench-views fila:', exc, flush=True)
                 next_reap = time.monotonic() + 60
             server.handle_request()
     path.unlink(missing_ok=True)
