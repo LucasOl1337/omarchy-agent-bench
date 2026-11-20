@@ -329,7 +329,7 @@ class ProfilePreparation(unittest.TestCase):
     def test_actual_cli_with_fixture_installation(self):
         repo = Path(__file__).resolve().parent.parent
         (self.base / 'bin').mkdir()
-        for name in ('bench_profile.py', 'bench_ops.py', 'bench_control.py'):
+        for name in ('bench_profile.py', 'bench_ops.py', 'bench_control.py', 'bench_fixas.py'):
             shutil.copyfile(repo / 'desktop' / name, self.base / 'desktop' / name)
         # This fixture exercises the real CLI/parser and filesystem transaction,
         # but must not race unrelated processes on the host. Override only this

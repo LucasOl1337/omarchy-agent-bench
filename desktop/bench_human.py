@@ -103,6 +103,10 @@ def resolve_visit(target, entries, window=None, workspace=None):
     if target.isdigit() and from_slot(int(target)):
         workspace = from_slot(int(target))
         matches = benches_on(workspace, entries)
+        if len(matches) > 1:
+            import bench_fixas
+            fixed = [m for m in matches if m in bench_fixas.names()]
+            matches = fixed if len(fixed) == 1 else matches
         return workspace, matches[0] if len(matches) == 1 else None
     if target not in entries:
         raise RuntimeError('Sem bancada ' + target + ' neste momento.')
@@ -162,6 +166,15 @@ def close_here():
     entries = load_entries()
     action, name = close_decision(active_window(), focused_workspace(), entries, clients())
     if action == 'stop':
+        import bench_fixas
+        if name in bench_fixas.names():
+            # Fixed benches keep their desktop (Lucas, 19/11/2026): Super+W hides
+            # the viewer and frees the bench; only a non-cofre bench loses its Chromium.
+            from bench_ops import release_bench
+            result = release_bench(name)
+            if viewer_name(active_window()) == name:
+                hypr('dispatch', 'hl.dsp.window.close()')
+            return result
         return stop_bench(name)
     hypr('dispatch', 'hl.dsp.window.close()')
     return {'closed': 'window'}

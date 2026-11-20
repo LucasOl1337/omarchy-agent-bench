@@ -16,6 +16,7 @@ from urllib.parse import quote, urlparse
 from urllib.request import ProxyHandler, Request, build_opener
 
 from bench_control import RUNTIME, views, control
+import bench_fixas
 
 BASE = Path(__file__).resolve().parent.parent
 STATE = BASE / 'desktop/sessions'
@@ -25,11 +26,18 @@ IDLE_SECONDS = int(os.environ.get('AGENT_BENCH_IDLE_SECONDS', str(15 * 60)))
 IDLE_CPU_SECONDS = float(os.environ.get('AGENT_BENCH_IDLE_CPU_SECONDS', '20'))
 IDLE_CPU_WINDOW = 10 * 60
 GC_DAYS = int(os.environ.get('AGENT_BENCH_GC_DAYS', '30'))
-# Lucas, 23/09/2026: nothing stays open just because it is fixed; only what is in use.
-NEVER_REAP = frozenset()
-# The only logged-in profile. Everything else gets a throwaway one.
+# The shared logged-in bench every agent depends on. Lucas, 19/11/2026: the
+# cofre never closes (it restarted 19 times in 7 days on the notebook, 4 failed).
 VAULT = 'cofre'
+NEVER_REAP = frozenset((VAULT,))
+# Logged-in profiles kept across stops. The fixed benches (bench_fixas) too;
+# everything else gets a throwaway one.
 PERSISTENT_PROFILES = frozenset((VAULT, 'dailywork-campanhas'))
+CLAIM = 'vez.json'
+
+
+def persistent_profile(name):
+    return name in PERSISTENT_PROFILES or name in bench_fixas.names()
 EPHEMERAL_MARK = '.efemero'
 CDP_PORT_BASE = 19000
 BLANK_URLS = ('about:blank', 'chrome://newtab/', 'chrome://new-tab-page/')
@@ -590,9 +598,9 @@ def provide_bench_profile(state):
     profile = state / 'chromium'
     if not profile.is_dir():
         profile.mkdir(parents=True, mode=0o700)
-        if state.name not in PERSISTENT_PROFILES:
+        if not persistent_profile(state.name):
             (profile / EPHEMERAL_MARK).write_text('perfil descartável: apagado quando a bancada para\n')
-    if state.name in PERSISTENT_PROFILES:
+    if persistent_profile(state.name):
         (state / '.keep').touch(exist_ok=True)
         (profile / EPHEMERAL_MARK).unlink(missing_ok=True)
     return profile
@@ -964,6 +972,131 @@ def pending_checkpoints(name, now=None):
     return sorted(found, key=lambda item: item['at'], reverse=True)
 
 
+def proc_start(pid):
+    try:
+        return int((Path('/proc') / str(pid) / 'stat').read_text().rsplit(')', 1)[1].split()[19])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def current_driver():
+    """The harness process behind this call (pid + start time), or None when unknown."""
+    try:
+        origin = describe_origin(os.getpid()) or {}
+    except Exception:
+        return None
+    pid = origin.get('harness_pid')
+    start = proc_start(pid) if pid else None
+    return {'pid': pid, 'start': start, 'harness': origin.get('harness')} if start else None
+
+
+def driver_gone(driver):
+    # Unknown drivers (old records, harness not recognised) are never treated as dead.
+    if not isinstance(driver, dict) or not driver.get('pid') or not driver.get('start'):
+        return False
+    return proc_start(driver['pid']) != driver['start']
+
+
+def same_driver(a, b):
+    return bool(a and b and a.get('pid') == b.get('pid') and a.get('start') == b.get('start'))
+
+
+def claim_of(name):
+    try:
+        value = json.loads((paths(name)[1] / CLAIM).read_text())
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def release(name):
+    (paths(name)[1] / CLAIM).unlink(missing_ok=True)
+
+
+def bench_free(name, driver=None, now=None):
+    """Free for the next agent: nobody inside, no pending tab, no live claim.
+
+    A claim lasts while its agent process lives and the bench saw activity in
+    the idle window; the reaper releases it when it closes the Chromium.
+    """
+    now = time.time() if now is None else now
+    runtime, _ = paths(name)
+    if (runtime / 'human-control').exists() or (runtime / 'human-coop').exists():
+        return False
+    if pending_checkpoints(name, now):
+        return False
+    claim = claim_of(name)
+    if not claim or same_driver(claim.get('driver'), driver):
+        return True
+    if driver_gone(claim.get('driver')):
+        return True
+    seen = max(last_activity(name) or 0, claim.get('at', 0))
+    return now - seen >= IDLE_SECONDS
+
+
+def _write_claim(name, driver, now):
+    _, state = paths(name)
+    state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temp = state / (CLAIM + '.' + uuid.uuid4().hex + '.tmp')
+    temp.write_text(json.dumps({'driver': driver, 'at': now}))
+    temp.chmod(0o600)
+    temp.replace(state / CLAIM)
+
+
+def pick_free(now=None):
+    """Resolve the name ``livre``: the caller's bench, else the first free fixed one.
+
+    The same agent process gets the same bench back. With every fixed bench
+    taken, a throwaway ``extra-N`` is named (and created by the caller).
+    """
+    now = time.time() if now is None else now
+    driver = current_driver()
+    STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with (STATE / '.livre.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        pool = bench_fixas.pool()
+        extras = [f'extra-{n}' for n in range(1, 41)]
+        for name in pool + extras:
+            if driver and same_driver(claim_of(name).get('driver'), driver):
+                _write_claim(name, driver, now)
+                return {'name': name, 'picked': 'sua'}
+        busy = []
+        for name in pool:
+            if bench_free(name, driver, now):
+                _write_claim(name, driver, now)
+                return {'name': name, 'picked': 'livre'}
+            busy.append(name)
+        for name in extras:
+            running = (RUNTIME / name / 'control.sock').exists()
+            if bench_free(name, driver, now) and (not running or claim_of(name)):
+                _write_claim(name, driver, now)
+                return {'name': name, 'picked': 'extra', 'busy': busy}
+    raise RuntimeError('Nenhuma bancada livre nem extra disponível (extra-1…extra-40 ocupadas).')
+
+
+def resolve_name(name):
+    """Turn the alias ``livre`` into a real bench name; anything else passes through."""
+    if name == bench_fixas.ALIAS:
+        return pick_free()['name']
+    return name
+
+
+def release_bench(name):
+    """Free a bench for the next agent. Fixed benches keep their desktop.
+
+    The cofre keeps everything (it never closes); another fixed bench closes
+    only its Chromium; any other bench stops as before.
+    """
+    if name == VAULT:
+        return {'name': name, 'kept': 'o cofre fica sempre ligado; nada foi fechado'}
+    if name in bench_fixas.names():
+        closed = close_browser(name)
+        release(name)
+        return {'name': name, 'browser_closed': closed['closed'], 'desktop': 'mantido'}
+    stop(name)
+    return {'name': name, 'stopped': True}
+
+
 def should_reap(name, now=None, check_input=True):
     if name in NEVER_REAP:
         return False
@@ -1099,7 +1232,7 @@ def close_browser(name, timeout=10):
                 break
             time.sleep(.1)
     removed = False
-    preserve = name in PERSISTENT_PROFILES or (RUNTIME / name / 'preserve-profile-on-stop').exists()
+    preserve = persistent_profile(name) or (RUNTIME / name / 'preserve-profile-on-stop').exists()
     if not preserve and (profile / EPHEMERAL_MARK).exists() and not _main_chromium_pids(profile):
         shutil.rmtree(profile, ignore_errors=True)
         removed = True
@@ -1123,7 +1256,16 @@ def reap_idle():
                     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
                     continue
+                fixed = name in bench_fixas.names()
+                if fixed and not _main_chromium_pids(paths(name)[1] / 'chromium'):
+                    continue  # Desktop only: nothing left to close.
                 if not should_reap(name, check_input=False):
+                    continue
+                if fixed:
+                    # Lucas, 19/11/2026: idle fixed benches close only the Chromium.
+                    close_browser(name)
+                    release(name)
+                    stopped.append(name + ':chromium')
                     continue
                 stop(name, preserve_profile=True)
                 stopped.append(name)

@@ -14,7 +14,7 @@ from bench_catalog import CatalogError, load_cua_tools
 from bench_native import guard_request, recheck_request, filter_response, available_tools, normalize_request
 from bench_web import WEB_TOOL, run as web_run
 from bench_ops import (cdp_snapshot, ensure, gc_sessions, infer_owner, load_owner,
-                       paths, request, wait_cdp, launch_cua, stop_cua, stop)
+                       paths, release_bench, request, resolve_name, wait_cdp, launch_cua, stop_cua, stop)
 
 READ_ONLY = frozenset(('list_apps', 'list_windows', 'get_window_state', 'verify_state',
     'clipboard_read', 'get_screen_size', 'get_desktop_state', 'get_cursor_position',
@@ -28,7 +28,7 @@ HUB_TOOLS = [
     {'name': 'bench_ensure', 'description':
      'Garante a bancada agent-bench (sobe se preciso, devolve viewer, opcionalmente abre Chromium). Toda navegação visual nesta máquina usa uma bancada, workspaces 6–11.',
      'inputSchema': {'type': 'object', 'properties': {
-         'bench': {'type': 'string', 'description': 'Nome da bancada (minúsculas, hífen).'},
+         'bench': {'type': 'string', 'description': 'Nome da bancada (minúsculas, hífen). "livre" pega a primeira fixa livre (ou a sua) e devolve o nome; use esse nome depois.'},
          'browser': {'type': 'boolean', 'description': 'Abrir o Chromium persistente previamente preparado e exclusivo desta bancada.'},
          'url': {'type': 'string', 'description': 'URL para abrir numa aba própria.'},
          'isolated': {'type': 'boolean', 'description': 'Compatibilidade legada; perfis vazios não são criados automaticamente.'}},
@@ -60,7 +60,7 @@ HUB_TOOLS = [
      'inputSchema': {'type': 'object', 'properties': {
          'bench': {'type': 'string'},
          'argv': {'type': 'array', 'items': {'type': 'string'}}}, 'required': ['bench', 'argv']}},
-    {'name': 'bench_stop', 'description': 'Encerra a bancada. Perfil e cookies permanecem em disco. Não encerre padrao sem pedido.',
+    {'name': 'bench_stop', 'description': 'Solta a bancada. Fixa: fecha só o Chromium e mantém o desktop (o cofre não fecha). Outra: encerra. Perfil e cookies ficam em disco. Não encerre padrao sem pedido.',
      'inputSchema': {'type': 'object', 'properties': {'bench': {'type': 'string'}}, 'required': ['bench']}},
     {'name': 'bench_gc', 'description': 'Lista ou remove sessões de bancada expiradas. Respeita .keep e bancadas ativas.',
      'inputSchema': {'type': 'object', 'properties': {
@@ -154,6 +154,8 @@ def handle_hub(name, arguments):
     if name == 'bench_web':
         return web_run(args)
     bench = args.get('bench', 'padrao')
+    if name != 'bench_list':
+        bench = resolve_name(bench)
     owner = args.get('owner') or infer_owner()
     if name == 'bench_ensure':
         return ensure(bench, owner=owner, browser=bool(args.get('browser') or args.get('url')),
@@ -213,8 +215,7 @@ def handle_hub(name, arguments):
     if name == 'bench_stop':
         if bench == 'padrao':
             raise RuntimeError('padrao sobe no login; só encerre se o humano pedir.')
-        stop(bench)
-        return {'stopped': bench}
+        return release_bench(bench)
     if name == 'bench_gc':
         return gc_sessions(days=args.get('days'), apply=bool(args.get('apply')))
     raise ValueError('Ferramenta desconhecida: ' + name)
@@ -443,7 +444,7 @@ class Hub:
                 bench = 'padrao'
                 if isinstance(arguments, dict):
                     arguments = dict(arguments)
-                    bench = arguments.pop('bench', bench)
+                    bench = resolve_name(arguments.pop('bench', bench))
                 ensure(bench, owner=infer_owner())
                 native_params = {'name': tool}
                 if 'arguments' in params:

@@ -12,6 +12,7 @@ import time
 
 from bench_control import RUNTIME, rpc
 from bench_workspaces import AGENT_WORKSPACES
+import bench_fixas
 
 CONFIG = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'hypr' / 'agent-bench.lua'
 REGISTRY = RUNTIME / 'views.json'
@@ -25,6 +26,11 @@ departed_since = {}
 stopping = False
 
 def pick_slot(exclude_name=None):
+    # A fixed bench lives on its own Super+F key (bench_fixas).
+    fixed = bench_fixas.load()
+    for item in fixed:
+        if item['name'] == exclude_name and item['slot'] < len(AGENT_WORKSPACES):
+            return AGENT_WORKSPACES[item['slot']]
     reserved = {e['workspace'] for n, e in entries.items() if n != exclude_name}
     occupied = {w['workspace']['id'] for w in clients()}
     visible = {m['activeWorkspace']['id'] for m in json.loads(hypr('-j', 'monitors'))}
@@ -35,6 +41,10 @@ def pick_slot(exclude_name=None):
     for n, e in entries.items():
         if n != exclude_name and e['workspace'] in used:
             used[e['workspace']] += 1
+    # Overflow shares a free-pool key before the cofre's or DailyWork's.
+    for item in fixed:
+        if not item['pool'] and item['slot'] < len(AGENT_WORKSPACES):
+            used[AGENT_WORKSPACES[item['slot']]] += 1
     return min(AGENT_WORKSPACES, key=lambda n: used[n])
 
 def hypr(*args):
@@ -169,7 +179,9 @@ def ensure(name, reopen=True):
         save()
         rules()
     entry = entries[name]
-    if entry['workspace'] not in AGENT_WORKSPACES:
+    slot = bench_fixas.slot_of(name)
+    if entry['workspace'] not in AGENT_WORKSPACES or (
+            slot is not None and slot < len(AGENT_WORKSPACES) and entry['workspace'] != AGENT_WORKSPACES[slot]):
         entry['workspace'] = pick_slot(name)
         save()
         rules()

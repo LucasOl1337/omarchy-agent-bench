@@ -286,6 +286,11 @@ def main():
             raise ValueError('--here só se aplica a collaborate, coop, resume, visit ou close-here')
         print(json.dumps(views(a.action, '--here' if a.here or '--here' in a.args else 'aqui'), indent=2)); return 0
     name = valid(a.name or 'padrao')
+    if name == 'livre' and a.action not in ('list', 'gc', 'tools', 'browser-status', 'keep', 'stop', 'status'):
+        from bench_ops import pick_free
+        picked = pick_free()
+        name = picked['name']
+        print(json.dumps({'bench': picked}, ensure_ascii=False), file=sys.stderr)
     if a.action == 'browser-status':
         d = bench_browser_snapshot(name, include_pages=False)
         # A location check needs no page titles, URLs or owned-tab access.
@@ -303,7 +308,8 @@ def main():
         print(json.dumps(close_browser(name))); return 0
     if a.action == '_serve': return serve(name)
     if a.action == 'stop':
-        return stop(name).returncode
+        from bench_ops import release_bench
+        print(json.dumps(release_bench(name), ensure_ascii=False)); return 0
     if a.action == 'list':
         found = []
         for p in sorted(RUNTIME.glob('*/control.sock')):

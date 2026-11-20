@@ -406,3 +406,27 @@ The CLI loads updates on each call. Existing MCP processes need their owner's
 reconnection to expose new actions; do not restart another mission's client.
 Direct CDP/Playwright clients must keep their own ownership registry and cleanup;
 they are not automatically governed by the semantic browser's quota or ledger.
+
+## Fixed benches and `livre` (v2, etapa 4)
+
+`$XDG_CONFIG_HOME/agent-bench/fixas` lists the fixed benches in Super+F order;
+`livre` marks the ones any agent can take. On the PC:
+
+```
+cofre
+dailywork-campanhas
+f3 livre
+f4 livre
+f5 livre
+```
+
+- The bench name `livre` (CLI, MCP and `agent-bench-web --bench livre`) resolves
+  to the caller's own bench, else the first free one; the reply names it. A
+  bench is free when no person is inside, no tab is pending and its claim
+  (`vez.json`: agent process + time) is gone, dead, or idle past the idle window.
+  With every free-pool bench taken, a throwaway `extra-N` is created.
+- Fixed benches keep their profile (logins survive) and their Super+F key.
+- Idle fixed benches close only Chromium; the desktop stays and the next call
+  reopens the browser. The cofre is never reaped.
+- `stop`/`bench_stop`/Super+W on a fixed bench close only its Chromium and free
+  it; on the cofre nothing closes. Other benches stop as before.
